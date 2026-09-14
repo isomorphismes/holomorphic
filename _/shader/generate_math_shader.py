@@ -15,6 +15,18 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def canonical_gzip(data: bytes) -> bytes:
+    compressed = bytearray(gzip.compress(data, compresslevel=9, mtime=0))
+    if len(compressed) < 10 or compressed[0:3] != b"\x1f\x8b\x08":
+        raise SystemExit("Python did not produce the expected gzip header")
+    # gzip header byte 9 is the originating-OS identifier.  CPython/zlib
+    # versions disagree about it when mtime=0 even when the compressed stream
+    # is identical.  Canonicalize that metadata byte; it does not affect the
+    # DEFLATE payload, CRC, size, or decompression semantics.
+    compressed[9] = 255
+    return bytes(compressed)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository-root", required=True)
@@ -79,9 +91,7 @@ def main() -> None:
     if args.packed_output:
         packed_path = Path(args.packed_output).resolve()
         packed_path.parent.mkdir(parents=True, exist_ok=True)
-        packed_bytes = base64.b64encode(
-            gzip.compress(output_bytes, compresslevel=9, mtime=0)
-        ) + b"\n"
+        packed_bytes = base64.b64encode(canonical_gzip(output_bytes)) + b"\n"
         packed_path.write_bytes(packed_bytes)
 
     if args.record:
