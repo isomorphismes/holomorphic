@@ -1,0 +1,50 @@
+name: Shader compiler provenance
+
+on:
+  push:
+    paths:
+      - 'math/**'
+      - '_/shader/**'
+      - '_/actions/setup-idris-shader/**'
+      - '.github/workflows/shader-provenance.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'math/**'
+      - '_/shader/**'
+      - '_/actions/setup-idris-shader/**'
+      - '.github/workflows/shader-provenance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiler-output:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: ./_/actions/setup-idris-shader
+
+      - name: Lower authoritative field
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/holomorphic-shader"
+          python3 _/shader/generate_math_shader.py \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
+          glslangValidator -S frag "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
+          grep -Fq 'uniform vec2 u_holomorphic_coefficients[5];' "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
+          grep -Fq 'uniform float u_remote_pole_time;' "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
+          sha256sum "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: compiler-generated-holomorphic-field
+          path: ${{ runner.temp }}/holomorphic-shader/continuation-math.frag
+          if-no-files-found: error

@@ -1,0 +1,51 @@
+name: Setup pinned Idris shader backend
+description: Build the exact Idris2 to GLSL ES compiler used by the Android shader provenance chain.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Idris shader build dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install --yes chezscheme glslang-tools libgmp-dev
+
+    - name: Restore Idris 2 compiler and API
+      id: idris-cache
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      with:
+        path: ~/.idris2
+        key: holomorphic-idris2-${{ runner.os }}-${{ runner.arch }}-0.8.0-api-v1
+
+    - name: Build Idris 2 compiler API
+      if: steps.idris-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf /tmp/Idris2
+        git clone --depth 1 --branch v0.8.0 https://github.com/idris-lang/Idris2.git /tmp/Idris2
+        make -C /tmp/Idris2 bootstrap SCHEME=chezscheme
+        make -C /tmp/Idris2 install
+        export PATH="$HOME/.idris2/bin:$PATH"
+        make -C /tmp/Idris2 clean
+        make -C /tmp/Idris2 all
+        make -C /tmp/Idris2 install
+        make -C /tmp/Idris2 install-api
+
+    - name: Put Idris 2 on PATH
+      shell: bash
+      run: echo "$HOME/.idris2/bin" >> "$GITHUB_PATH"
+
+    - name: Build pinned GLSL ES backend
+      shell: bash
+      run: |
+        set -euo pipefail
+        backend_dir="$GITHUB_WORKSPACE/_/.idris-shader-backend"
+        backend_commit="$(python3 -c 'import json; print(json.load(open("_/shader/backend.json"))["commit"])')"
+        rm -rf "$backend_dir"
+        git clone --no-checkout https://github.com/isomorphisms/idris-shader-backend.git "$backend_dir"
+        git -C "$backend_dir" checkout --detach "$backend_commit"
+        test "$(git -C "$backend_dir" rev-parse HEAD)" = "$backend_commit"
+        make -C "$backend_dir" backend
+        "$backend_dir/build/exec/idris2-glsles" --version || true
