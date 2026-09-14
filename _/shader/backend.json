@@ -1,0 +1,8 @@
+{
+  "backend": "idris-shader-backend/glsles",
+  "commit": "c707bfd8bb19254de38cee8d8d9df232a7d8affa",
+  "compiler": "idris2-glsles",
+  "idris2_version": "0.8.0",
+  "precision_policy": "F32 semantics lowered to GLSL ES highp float",
+  "repository": "isomorphisms/idris-shader-backend"
+}
