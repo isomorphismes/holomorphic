@@ -37,14 +37,20 @@ jobs:
           mkdir -p "$RUNNER_TEMP/holomorphic-shader"
           python3 _/shader/generate_math_shader.py \
             --repository-root "$GITHUB_WORKSPACE" \
-            --output "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
+            --output "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag" \
+            --record "$RUNNER_TEMP/holomorphic-shader/compiler-output.json" \
+            --packed-output "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag.gz.b64"
           glslangValidator -S frag "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
           grep -Fq 'uniform vec2 u_holomorphic_coefficients[5];' "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
           grep -Fq 'uniform float u_remote_pole_time;' "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
           sha256sum "$RUNNER_TEMP/holomorphic-shader/continuation-math.frag"
+          cat "$RUNNER_TEMP/holomorphic-shader/compiler-output.json"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: compiler-generated-holomorphic-field
-          path: ${{ runner.temp }}/holomorphic-shader/continuation-math.frag
+          path: |
+            ${{ runner.temp }}/holomorphic-shader/continuation-math.frag
+            ${{ runner.temp }}/holomorphic-shader/continuation-math.frag.gz.b64
+            ${{ runner.temp }}/holomorphic-shader/compiler-output.json
           if-no-files-found: error
