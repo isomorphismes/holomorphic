@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,7 @@ def main() -> None:
     backend = root / "_/.idris-shader-backend"
     compiler = backend / "build/exec/idris2-glsles"
     source = root / "math/HolomorphicField.idr"
+    staged_source = backend / "src/HolomorphicField.idr"
 
     if not compiler.is_file():
         raise SystemExit(
@@ -35,20 +37,27 @@ def main() -> None:
             f"expected {identity['commit']}, got {actual_backend_commit}"
         )
 
+    if staged_source.exists():
+        raise SystemExit(f"refusing to overwrite backend source {staged_source}")
+
     output.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        str(compiler),
-        "--cg",
-        "glsles",
-        "--source-dir",
-        str(backend / "src"),
-        "--output-dir",
-        str(output.parent),
-        str(source),
-        "-o",
-        output.stem,
-    ]
-    subprocess.run(command, cwd=backend, check=True)
+    shutil.copyfile(source, staged_source)
+    try:
+        command = [
+            str(compiler),
+            "--cg",
+            "glsles",
+            "--source-dir",
+            str(backend / "src"),
+            "--output-dir",
+            str(output.parent),
+            str(staged_source),
+            "-o",
+            output.stem,
+        ]
+        subprocess.run(command, cwd=backend, check=True)
+    finally:
+        staged_source.unlink(missing_ok=True)
 
     generated = output.parent / f"{output.stem}.frag"
     if generated != output:
