@@ -25,6 +25,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s tests -v
+      - name: Test shader SHA-256 implementation
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Iandroid/app/src/main/cpp \
+            tests/test_shader_sha256.c \
+            android/app/src/main/cpp/shader_sha256.c \
+            -o /tmp/test-shader-sha256
+          /tmp/test-shader-sha256
       - name: Smoke-test three holomorphic direction workers
         run: |
           cc -std=c11 -Wall -Wextra -Werror \

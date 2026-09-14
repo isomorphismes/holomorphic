@@ -5,3 +5,4 @@ build/
 dist/
 *.egg-info/
 media/
+_/.idris-shader-backend/
