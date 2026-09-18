@@ -13,6 +13,15 @@ These rules apply in addition to stricter repository-specific rules below.
 - Mocks, fixtures, harnesses, and today's platform adapter must cross replaceable interfaces; they do not get to define the permanent architecture merely because they are currently convenient.
 - Preserve the repository's chosen implementation path and layout before introducing familiar infrastructure. Where `_` is an established machinery boundary, keep build/package/generated/test/compiler material there and preserve canonical source and intended soft links.
 
+## Preserve Android update identity
+
+Installable test APKs must keep the established package identity, persistent
+sideload signing certificate, and nondecreasing version code. Do not generate a
+new debug signer per machine, runner, branch, or build, and do not uninstall an
+existing copy to hide a signer or downgrade failure. Android acceptance must
+exercise replacement installation without uninstalling first. Production/store
+signing remains a separate boundary.
+
 ## Rendering work is runtime work
 
 When a task asks for a screenshot, image, video, MP4, GIF, screen recording, animation, or other visual demonstration of this app or renderer, the evidence must come from the actual software under test running.
