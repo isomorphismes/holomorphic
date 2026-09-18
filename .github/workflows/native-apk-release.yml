@@ -159,6 +159,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -no-metrics
           script: |
             adb install -r "artifacts/analytic-continuation-${RELEASE_VERSION}.apk"
+            adb install -r "artifacts/analytic-continuation-${RELEASE_VERSION}.apk"
             adb logcat -c
             adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
             timeout 20 bash -c 'until adb logcat -d | grep -Fq "holomorphic field ready:"; do sleep 1; done'
