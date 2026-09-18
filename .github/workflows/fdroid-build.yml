@@ -29,7 +29,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
       - name: Install Android build inputs
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.22.1"
