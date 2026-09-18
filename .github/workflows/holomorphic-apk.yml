@@ -121,6 +121,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -no-metrics
           script: |
             adb install -r artifacts/app-debug.apk
+            adb install -r artifacts/app-debug.apk
             adb shell settings put secure immersive_mode_confirmations confirmed
             adb logcat -c
             adb shell am start -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
