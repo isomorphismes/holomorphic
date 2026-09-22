@@ -83,6 +83,8 @@ jobs:
           java-version: '17'
 
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: ''
 
       - name: Install native Android toolchain
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.22.1"
@@ -158,6 +160,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -no-metrics
           script: |
+            adb install -r "artifacts/analytic-continuation-${RELEASE_VERSION}.apk"
             adb install -r "artifacts/analytic-continuation-${RELEASE_VERSION}.apk"
             adb logcat -c
             adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
