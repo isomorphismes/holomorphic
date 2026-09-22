@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+env:
+  SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  COMPLEX_PROJECTIVE_POLICY_SHA: 8e14cb50db10a055a0849e0ad7cab26454cd5791
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
@@ -16,6 +20,22 @@ jobs:
           ref: main
           path: .wegert-upstream
           persist-credentials: false
+      - name: Check out canonical complex/projective corpus
+        uses: actions/checkout@v4
+        with:
+          repository: isomorphisms/Idric
+          ref: math/complex-projective-semantics
+          path: .idric-complex
+          persist-credentials: false
+      - name: Check out merged receipt policy
+        uses: actions/checkout@v4
+        with:
+          repository: isomorphisms/ai-ci
+          ref: ${{ env.COMPLEX_PROJECTIVE_POLICY_SHA }}
+          path: .ai-ci-complex-policy
+          persist-credentials: false
+      - name: Record complex/projective semantic target
+        run: echo "IDRIC_COMPLEX_SEMANTICS_SHA=$(git -C .idric-complex rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Reject cross-repository coloring drift
         run: >-
           cmp
@@ -25,6 +45,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s tests -v
+      - name: Verify application evidence claims against merged policy
+        run: python3 .ai-ci-complex-policy/complex-projective/verify_receipt.py verify build/complex-projective-consumer/receipt.tsv
       - name: Smoke-test three holomorphic direction workers
         run: |
           cc -std=c11 -Wall -Wextra -Werror \
@@ -38,3 +60,10 @@ jobs:
         run: |
           test ! -e android/app/src/main/cpp/analytic_continuation.c
           ! grep -RniE 'lasso_map|inverse_lasso|dragging_lasso|lasso_coefficients|continuation_path' android/app/src/main/cpp android/app/src/main/assets/continuation.frag.in
+      - name: Retain complex/projective consumer receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: complex-projective-analytic-consumer
+          path: build/complex-projective-consumer
+          if-no-files-found: warn

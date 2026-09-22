@@ -1,0 +1,28 @@
+{
+  "schema": "analytic-continuation-complex-consumer-v1",
+  "model": "f(z)=R(z)*exp(q(z))",
+  "normalization": "u=z/6",
+  "divisor": {
+    "zeros": [[-0.35, 0.2]],
+    "poles": [[0.4, -0.25]]
+  },
+  "entire_q_coefficients_in_u_low_to_high_without_constant": [
+    [0.12, 0.0],
+    [0.03, 0.0],
+    [0.0, 0.0],
+    [0.0, 0.0],
+    [0.0, 0.0]
+  ],
+  "sample_points": [
+    [0.0, 0.0],
+    [0.5, -0.25],
+    [-0.75, 0.5],
+    [1.0, 1.0]
+  ],
+  "notes": [
+    "R alone carries the explicit finite zeros and poles.",
+    "q is a polynomial in u and is therefore entire in z.",
+    "exp(q) is entire and nonzero, so it adds no finite zeros or poles.",
+    "The live application does not currently require a CP^1 value at infinity; projective semantics remain available at the shared language/backend boundary rather than being forced into viewport state."
+  ]
+}
