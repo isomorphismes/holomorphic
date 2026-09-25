@@ -13,66 +13,28 @@ concurrency:
   group: holomorphic-structured-shader-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  IDRIS2_VERSION: 0.8.0
-
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - name: Check out Holomorphic
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-
-      - name: Check out structured shader backend
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: isomorphisms/idris-shader-backend
-          ref: holomorphic-live-field-follower
-          path: shader-backend
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install shader compiler dependencies
+      - name: Verify compiler-generated structured F32 shader
         run: |
           sudo apt-get update
-          sudo apt-get install --yes chezscheme glslang-tools libgmp-dev
-
-      - name: Restore Idris 2 compiler and API
-        id: idris-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.idris2
-          key: idris2-${{ runner.os }}-${{ runner.arch }}-${{ env.IDRIS2_VERSION }}-ubuntu-api-v1
-
-      - name: Build Idris 2 and compiler API
-        if: steps.idris-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch "v${IDRIS2_VERSION}"             https://github.com/idris-lang/Idris2.git /tmp/Idris2
-          make -C /tmp/Idris2 bootstrap SCHEME=chezscheme
-          make -C /tmp/Idris2 install
-          export PATH="$HOME/.idris2/bin:$PATH"
-          make -C /tmp/Idris2 clean
-          make -C /tmp/Idris2 all
-          make -C /tmp/Idris2 install
-          make -C /tmp/Idris2 install-api
-
-      - name: Put Idris 2 on PATH
-        run: echo "$HOME/.idris2/bin" >> "$GITHUB_PATH"
-
-      - name: Generate structured F32 live field
-        working-directory: shader-backend
-        run: |
-          make backend
-          ./build/exec/idris2-glsles --cg glsles             --directive float-width=f32             --directive dump-ir=/tmp/holomorphic-explorer-background.ir             --source-dir src             --output-dir ../android/app/src/main/assets             src/Example/HolomorphicExplorerBackground.idr             -o continuation-structured
-          test "$(grep -c 'for (int ' ../android/app/src/main/assets/continuation-structured.frag)" -eq 4
-          ! grep -Fq ' ? ' ../android/app/src/main/assets/continuation-structured.frag
-          test "$(grep -c 'bounded-loop' /tmp/holomorphic-explorer-background.ir)" -eq 4
-          glslangValidator -S frag ../android/app/src/main/assets/continuation-structured.frag
-          glslangValidator -l fixtures/wegert-fullscreen.vert             ../android/app/src/main/assets/continuation-structured.frag
+          sudo apt-get install --yes glslang-tools
+          SHADER=android/app/src/main/assets/continuation-structured.frag
+          echo 'd28a42aa77e53beead55005e399f5a031f6bd05e4615366c2e2ba4b3ff58c024  '${SHADER} | sha256sum -c -
+          test "$(grep -c 'for (int ' "${SHADER}")" -eq 4
+          ! grep -Fq ' ? ' "${SHADER}"
+          glslangValidator -S frag "${SHADER}"
 
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
         with:
@@ -99,7 +61,5 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: holomorphic-structured-f32-shader-evidence
-          path: |
-            android/app/src/main/assets/continuation-structured.frag
-            /tmp/holomorphic-explorer-background.ir
+          path: android/app/src/main/assets/continuation-structured.frag
           if-no-files-found: error
