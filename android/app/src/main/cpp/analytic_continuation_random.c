@@ -270,7 +270,7 @@ static bool create_renderer(struct engine *engine) {
         engine->pole_positions_location < 0 ||
         engine->holomorphic_coefficients_location < 0 ||
         engine->remote_pole_time_location < 0 ||
-        engine->zoom_location < 0 || engine->placement_kind_location < 0
+        engine->zoom_location < 0
     ) {
         LOGE("holomorphic field shader uniforms unavailable");
         return false;
@@ -452,7 +452,9 @@ static void draw_frame(struct engine *engine) {
     );
     glUniform1f(engine->remote_pole_time_location, engine->remote_pole_time);
     glUniform1f(engine->zoom_location, engine->zoom);
-    glUniform1i(engine->placement_kind_location, (int)engine->placement_kind);
+    if (engine->placement_kind_location >= 0) {
+        glUniform1i(engine->placement_kind_location, (int)engine->placement_kind);
+    }
 
     glBindVertexArray(engine->vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
