@@ -348,3 +348,4 @@ void main() {
   vec4 _idris_t287 = vec4(_idris_t284, _idris_t285, _idris_t286, 1.0);
   _idris_fragColor = _idris_t287;
 }
+
