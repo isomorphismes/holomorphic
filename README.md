@@ -1,5 +1,11 @@
 # Analytic Continuation
 
+## Repository layout
+
+The source-facing root exposes maintained code directly. Build, packaging, generated, test, release, and Android project machinery is canonical under [`_/`](_/). Old directory names remain only as compatibility symlinks. GitHub Actions stays under `.github/workflows/` because GitHub requires that location.
+
+See [`LAYOUT.md`](LAYOUT.md).
+
 Native Android explorer for a meromorphic complex function whose holomorphic freedom stays alive.
 
 The picture is the ordinary Wegert-style complex plane with explicit zeros and poles, multiplied by a continuously varying holomorphic/nonvanishing factor:
@@ -54,6 +60,6 @@ Reusable historical mathematics from those experiments has been archived there. 
 
 ## Runtime
 
-The Android project is under `android/`. It uses a C `NativeActivity`, EGL, and OpenGL ES 3. No Python runtime or desktop movie renderer owns the live interaction.
+The canonical Android project is under `_/android/`; the top-level `android` entry is only a compatibility symlink. It uses a C `NativeActivity`, EGL, and OpenGL ES 3. No Python runtime or desktop movie renderer owns the live interaction.
 
 Current checks cover the holomorphic direction search, absence of migrated lasso/disc machinery, and the Wegert color boundary. Android emulator evidence and target-phone GPU evidence remain separate.
