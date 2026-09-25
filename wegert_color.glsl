@@ -1,0 +1,1 @@
+_/android/app/src/main/assets/wegert_color.glsl
