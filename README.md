@@ -1,5 +1,11 @@
 # Analytic continuation
 
+## Repository layout
+
+The source-facing root exposes maintained code directly. Build, packaging, generated, test, release, and Android project machinery is canonical under [`_/`](_/). Old directory names remain only as compatibility symlinks. GitHub Actions stays under `.github/workflows/` because GitHub requires that location.
+
+See [`LAYOUT.md`](LAYOUT.md).
+
 Make a short movie in which a complex grid opens from the input plane into the
 map `z → f(z)`, pauses, and closes again.
 
