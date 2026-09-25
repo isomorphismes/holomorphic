@@ -5,3 +5,10 @@ build/
 dist/
 *.egg-info/
 media/
+
+# canonical machinery tree
+_/**/build/
+_/**/.gradle/
+_/**/.cxx/
+_/**/local.properties
+_/**/__pycache__/
