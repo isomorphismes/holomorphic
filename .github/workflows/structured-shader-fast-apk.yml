@@ -1,0 +1,65 @@
+name: Holomorphic Structured Shader Fast APK
+
+on:
+  push:
+    branches:
+      - android/structured-shader-follower
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: holomorphic-structured-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out Holomorphic
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify compiler-generated structured F32 shader
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes glslang-tools
+          SHADER=android/app/src/main/assets/continuation-structured.frag
+          echo 'd28a42aa77e53beead55005e399f5a031f6bd05e4615366c2e2ba4b3ff58c024  '${SHADER} | sha256sum -c -
+          test "$(grep -c 'for (int ' "${SHADER}")" -eq 4
+          ! grep -Fq ' ? ' "${SHADER}"
+          glslangValidator -S frag "${SHADER}"
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: ''
+
+      - name: Install native Android toolchain
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.22.1"
+
+      - name: Build structured F32 APK
+        working-directory: android
+        run: ./gradlew --no-daemon -PstructuredFollower=true :app:assembleDebug
+
+      - name: Verify stable sideload signing identity
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs             android/app/build/outputs/apk/debug/app-debug.apk > /tmp/apk-signing.txt
+          grep -Fqi '27eee69b1cbeebc30eab35fe7eb5459c542784b4ccc68453a372cb6802ccf7cf'             /tmp/apk-signing.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: holomorphic-structured-f32-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: holomorphic-structured-f32-shader-evidence
+          path: android/app/src/main/assets/continuation-structured.frag
+          if-no-files-found: error
