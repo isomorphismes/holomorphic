@@ -40,27 +40,40 @@ if (sideloadSigningAvailable && !sideloadKeystoreFile.exists()) {
 }
 
 val wegertColorMarker = "/*__WEGERT_COLOR_CORE__*/"
+val useStructuredFollower = project.findProperty("structuredFollower") == "true"
 val generatedWegertAssets = layout.buildDirectory.dir("generated/wegert-assets")
 val assembleContinuationShader = tasks.register("assembleContinuationShader") {
     val template = file("src/main/assets/continuation.frag.in")
     val colorCore = file("src/main/assets/wegert_color.glsl")
+    val structuredFollower = file("src/main/assets/continuation-structured.frag")
     val output = generatedWegertAssets.map { it.file("continuation.frag") }
 
-    inputs.files(template, colorCore)
+    if (useStructuredFollower) {
+        inputs.file(structuredFollower)
+    } else {
+        inputs.files(template, colorCore)
+    }
     outputs.file(output)
 
     doLast {
-        val templateText = template.readText()
-        check(templateText.contains(wegertColorMarker)) {
-            "Continuation fragment template is missing the Wegert coloring-core marker"
-        }
-        check(templateText.indexOf(wegertColorMarker) == templateText.lastIndexOf(wegertColorMarker)) {
-            "Continuation fragment template must contain exactly one Wegert coloring-core marker"
-        }
-
         val outputFile = output.get().asFile
         outputFile.parentFile.mkdirs()
-        outputFile.writeText(templateText.replace(wegertColorMarker, colorCore.readText()))
+
+        if (useStructuredFollower) {
+            check(structuredFollower.isFile) {
+                "Structured follower shader is missing: " + structuredFollower
+            }
+            outputFile.writeText(structuredFollower.readText())
+        } else {
+            val templateText = template.readText()
+            check(templateText.contains(wegertColorMarker)) {
+                "Continuation fragment template is missing the Wegert coloring-core marker"
+            }
+            check(templateText.indexOf(wegertColorMarker) == templateText.lastIndexOf(wegertColorMarker)) {
+                "Continuation fragment template must contain exactly one Wegert coloring-core marker"
+            }
+            outputFile.writeText(templateText.replace(wegertColorMarker, colorCore.readText()))
+        }
     }
 }
 
