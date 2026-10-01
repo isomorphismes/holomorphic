@@ -74,10 +74,11 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug
 
-      - name: Verify stable sideload signing identity
-        run: |
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk > /tmp/apk-signing.txt
-          grep -Fqi '27eee69b1cbeebc30eab35fe7eb5459c542784b4ccc68453a372cb6802ccf7cf' /tmp/apk-signing.txt
+      - name: Verify finished APK signer against central registry
+        uses: isomorphisms/ai-ci/android-signing@b3af13b3ab2bac9dd7c72bf9dd855ed5a17609b5
+        with:
+          apk: android/app/build/outputs/apk/debug/app-debug.apk
+          lane: test
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

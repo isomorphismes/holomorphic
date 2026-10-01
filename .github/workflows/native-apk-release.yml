@@ -119,6 +119,12 @@ jobs:
           cp "$source_apk" "$release_apk"
           sha256sum "$release_apk" > "${release_apk}.sha256"
 
+      - name: Verify finished GitHub APK signer against central registry
+        uses: isomorphisms/ai-ci/android-signing@b3af13b3ab2bac9dd7c72bf9dd855ed5a17609b5
+        with:
+          apk: analytic-continuation-${{ env.RELEASE_VERSION }}.apk
+          lane: test
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: analytic-continuation-${{ env.RELEASE_VERSION }}-apk
