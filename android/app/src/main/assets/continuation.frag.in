@@ -32,13 +32,14 @@ vec2 holomorphic_q(vec2 z) {
     // Keep the normalization fixed in the mathematical plane rather than tied
     // to zoom, but make the live entire factor large enough to read on a phone.
     vec2 u = z / 3.0;
-    vec2 power = u;
-    vec2 q = vec2(0.0);
-    for (int index = 0; index < HOLOMORPHIC_COEFFICIENT_COUNT; ++index) {
-        q += complex_multiply(u_holomorphic_coefficients[index], power);
-        power = complex_multiply(power, u);
+
+    // Horner evaluation for q(u) = c1*u + ... + cN*u^N.
+    // This uses N complex multiplies instead of the power ladder's 2N.
+    vec2 q = u_holomorphic_coefficients[HOLOMORPHIC_COEFFICIENT_COUNT - 1];
+    for (int index = HOLOMORPHIC_COEFFICIENT_COUNT - 2; index >= 0; --index) {
+        q = complex_multiply(q, u) + u_holomorphic_coefficients[index];
     }
-    return q;
+    return complex_multiply(q, u);
 }
 
 float hash1(float x) {
