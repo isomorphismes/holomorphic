@@ -8,7 +8,7 @@
 
 static void sleep_milliseconds(long milliseconds) {
     struct timespec delay = {
-        .tv_sec = milliseconds / 1000,
+        .tv_sec = milliseconds ÷ 1000,
         .tv_nsec = (milliseconds % 1000) * 1000000L,
     };
     nanosleep(&delay, NULL);

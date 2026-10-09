@@ -1,0 +1,8 @@
+build_id	target	toolchain	ick_revision	ick_status	ick_evidence
+holomorphic-owned-c	armeabi-v7a	ick	c61e448251744a2f40ad743ebef1a027bdcd2f9d	qualified	Pinned shared ICK Android qualification followed by exact-head CMake application build; inherited Fortify2 and hardening retained
+holomorphic-ndk-glue-and-link	armeabi-v7a	ndk	c61e448251744a2f40ad743ebef1a027bdcd2f9d	gap:upstream-glue-assembler-and-platform-link	Unmodified NDK NativeActivity glue, sysroot, assembly, and final platform link remain NDK stages
+holomorphic-owned-c	arm64-v8a	ick	c61e448251744a2f40ad743ebef1a027bdcd2f9d	qualified	Pinned shared ICK Android qualification followed by exact-head CMake application build; inherited Fortify2 and hardening retained
+holomorphic-ndk-glue-and-link	arm64-v8a	ndk	c61e448251744a2f40ad743ebef1a027bdcd2f9d	gap:upstream-glue-assembler-and-platform-link	Unmodified NDK NativeActivity glue, sysroot, assembly, and final platform link remain NDK stages
+holomorphic-owned-c	x86_64	ick	c61e448251744a2f40ad743ebef1a027bdcd2f9d	qualified	Pinned shared ICK Android qualification followed by exact-head CMake application build; inherited Fortify2 and hardening retained
+holomorphic-ndk-glue-and-link	x86_64	ndk	c61e448251744a2f40ad743ebef1a027bdcd2f9d	gap:upstream-glue-assembler-and-platform-link	Unmodified NDK NativeActivity glue, sysroot, assembly, and final platform link remain NDK stages
+holomorphic-worker-tests	x86_64-linux-gnu	ick	c61e448251744a2f40ad743ebef1a027bdcd2f9d	qualified	Existing worker regression compiled and executed through pinned native ICK
