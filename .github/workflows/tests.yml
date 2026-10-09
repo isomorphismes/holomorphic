@@ -4,13 +4,22 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Qualify the native ICK compiler
+        id: ick
+        uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
+
       - name: Check out Wegert coloring oracle
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: isomorphismes/wegert
           ref: main
@@ -21,19 +30,13 @@ jobs:
           cmp
           android/app/src/main/assets/wegert_color.glsl
           .wegert-upstream/code/wegert_color.glsl
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s tests -v
       - name: Smoke-test three holomorphic direction workers
         run: |
-          cc -std=c11 -Wall -Wextra -Werror \
-            -Iandroid/app/src/main/cpp \
-            tests/test_holomorphic_walk.c \
-            android/app/src/main/cpp/holomorphic_walk.c \
-            -pthread -lm \
-            -o /tmp/test-holomorphic-walk
-          /tmp/test-holomorphic-walk
+          make -f _/ick/Makefile test ICK="${{ steps.ick.outputs.compiler }}"
       - name: Reject migrated Lacunary machinery in the live app
         run: |
           test ! -e android/app/src/main/cpp/analytic_continuation.c

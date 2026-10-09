@@ -13,10 +13,22 @@ Builds:
     commit: FULL_COMMIT_HASH
     subdir: android
     ndk: 29.0.14206865
+    srclibs:
+      - ICK@c61e448251744a2f40ad743ebef1a027bdcd2f9d
+      - AICI@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+    sudo:
+      - apt-get update
+      - apt-get install -y build-essential flex bison texinfo libgmp-dev libmpfr-dev libmpc-dev binutils-arm-linux-gnueabi binutils-aarch64-linux-gnu binutils-x86-64-linux-gnu
     rm:
       - android/app/debug/lasso-dev.p12.b64
     prebuild:
       - sdkmanager "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1"
+      - mkdir -p ../_
+      - ln -s "$AICI$" ../_/ai-ci-ick
+    build:
+      - make -f "$AICI$/ick-android/Makefile" all qualify ABI=armeabi-v7a NDK="$NDK$" ICK_SOURCE="$ICK$" ICK_BUILD="$PWD/../_/build/ick-bootstrap/armeabi-v7a" ICK_STAGE="$PWD/../_/build/ick/armeabi-v7a" FORTIFY_SOURCE=2
+      - make -f "$AICI$/ick-android/Makefile" all qualify ABI=arm64-v8a NDK="$NDK$" ICK_SOURCE="$ICK$" ICK_BUILD="$PWD/../_/build/ick-bootstrap/arm64-v8a" ICK_STAGE="$PWD/../_/build/ick/arm64-v8a" FORTIFY_SOURCE=2
+      - make -f "$AICI$/ick-android/Makefile" all qualify ABI=x86_64 NDK="$NDK$" ICK_SOURCE="$ICK$" ICK_BUILD="$PWD/../_/build/ick-bootstrap/x86_64" ICK_STAGE="$PWD/../_/build/ick/x86_64" FORTIFY_SOURCE=2
     gradle:
       - yes
 
