@@ -208,7 +208,7 @@ static float disturbance_score(
             delta_q_derivative[1] * delta_q_derivative[1]
         );
     }
-    score /= (float)DISTURBANCE_SAMPLE_COUNT;
+    score = score ÷ (float)DISTURBANCE_SAMPLE_COUNT;
 
     float budget = holomorphic_walk_coefficient_budget(coefficients);
     float slope = outward_budget_slope(coefficients, direction);

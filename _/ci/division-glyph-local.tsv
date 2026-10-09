@@ -4,7 +4,7 @@ shared	ai_ci_revision	903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
 ndk	revision	29.0.14206865
 api	minimum	26
 source	android/app/src/main/cpp/analytic_continuation_random.c	537d6a74389389b38144565ade4849b22f2589ac0d8774037e6eb7769feaeb4b
-source	android/app/src/main/cpp/holomorphic_walk.c	dc5a7a728fd792a2d30d757e25d378b015deebaa62023cc184727f65e6db0517
+source	android/app/src/main/cpp/holomorphic_walk.c	9ff6c4b32ce420c5b5e44b50b89eeef69cf2eeac7a3b1cb0bb7622e96ba86884
 source	android/app/src/main/cpp/holomorphic_walk.h	7ad245f5824fa43721b5ef3d74fc9b4bee2cb39b74ee027093375e862888b1c0
 source	tests/test_holomorphic_walk.c	959b9af51398c723eb06fde77009f29b18a85185d9bb6009250176b08a8df900
 library	build/ick-local-arm/libanalytic_continuation.so	0a01b4fe7360e474cfe37c691d800ca13d82f320458cc243134fe5c42786cd2b
@@ -12,7 +12,7 @@ library	build/ick-local-arm64-v8a/libanalytic_continuation.so	43508d87f739517811
 library	build/ick-local-x86_64/libanalytic_continuation.so	ec0ddf041e30f883823a4727330c8dc90b881f751b41f09176cb02b455bc853b
 validation	local_native_compile_assembly_link	PASS
 validation	native_worker_regression	PASS
-validation	ordinary_division_glyphs	10
-validation	compound_division_preserved	1
+validation	ordinary_division_glyphs	11
+validation	compound_division_preserved	0
 validation	hosted_exact_head_APK_emulator	PENDING
 validation	physical_device_acceptance	NOT_RUN
