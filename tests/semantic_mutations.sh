@@ -56,6 +56,8 @@ build_and_test() {
         cat "$scratch/$case_id-semantic.log" >&2
         exit 1
     fi
+    cp "$scratch/$case_id-smoke.log" "$receipt_dir/$case_id-smoke.log"
+    cp "$scratch/$case_id-semantic.log" "$receipt_dir/$case_id-semantic.log"
     printf '%s\t%s\t%s\tPASS\t%s\t%s\thost-CPU-direction-at-not-GPU\n' \
         "$case_id" "$revision" "$source_sha" "$semantic" "$seed" >> "$receipt"
     printf '%s smoke=PASS semantics=%s\n' "$case_id" "$semantic"
@@ -69,7 +71,7 @@ make_mutant() {
     replace_text=$3
     expected_hits=$4
     mutant="$scratch/$case_id.c"
-    actual_hits=$(grep -Ec "$find_text" "$source_file" || true)
+    actual_hits=$(grep -c "$find_text" "$source_file" || true)
     if [ "$actual_hits" -ne "$expected_hits" ]; then
         echo "MUTATION-SOURCE-SHAPE-DRIFT case=$case_id expected=$expected_hits observed=$actual_hits" >&2
         exit 1
