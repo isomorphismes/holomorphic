@@ -1,0 +1,95 @@
+name: Checked Fock kernel source to GLSL
+
+on:
+  pull_request:
+    paths:
+      - 'gpu/Example/FockValueProbe.idr'
+      - 'docs/fock-generated-probe.md'
+      - '.github/workflows/fock-kernel-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generated-fock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact Holomorphic head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exp-capable typed shader backend
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: fuego-ironworks/idris-shader-backend
+          ref: 2a9365096dc296824637a56cbf99a1cb3566f184
+          path: _/shader/backend
+          persist-credentials: false
+
+      - name: Install compiler and GLSL validator prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes chezscheme glslang-tools libgmp-dev
+
+      - name: Restore exact Idris2 API environment
+        id: idris-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ~/.idris2
+          key: holomorphic-idris2-0.8.0-chezscheme-api-v1
+
+      - name: Build Idris2 compiler and API if not cached
+        if: steps.idris-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v0.8.0 https://github.com/idris-lang/Idris2.git /tmp/Idris2
+          make -C /tmp/Idris2 bootstrap SCHEME=chezscheme
+          make -C /tmp/Idris2 install
+          export PATH="$HOME/.idris2/bin:$PATH"
+          make -C /tmp/Idris2 clean
+          make -C /tmp/Idris2 all
+          make -C /tmp/Idris2 install
+          make -C /tmp/Idris2 install-api
+
+      - name: Put Idris2 on path
+        run: echo "$HOME/.idris2/bin" >> "$GITHUB_PATH"
+
+      - name: Compile actual Fock source to GLSL and link
+        run: |
+          set -euo pipefail
+          backend="_/shader/backend"
+          mkdir -p "_/shader/fock-output" "$backend/src/Example"
+          cp gpu/Example/FockValueProbe.idr "$backend/src/Example/FockValueProbe.idr"
+          make -C "$backend" backend
+          "$backend/build/exec/idris2-glsles" --cg glsles \
+            --source-dir "$backend/src" --output-dir "_/shader/fock-output" \
+            "$backend/src/Example/FockValueProbe.idr" -o fock-value
+          frag="_/shader/fock-output/fock-value.frag"
+          test -s "$frag"
+          grep -Fq 'exp(' "$frag"
+          grep -Fq 'uniform vec2 u_anchor;' "$frag"
+          grep -Fq 'uniform float u_scale;' "$frag"
+          grep -Fq 'uniform vec2 u_amplitude;' "$frag"
+          glslangValidator -S frag "$frag"
+          glslangValidator -l "$backend/fixtures/wegert-fullscreen.vert" "$frag"
+          sha256sum "$frag" > "_/shader/fock-output/fock-value.frag.sha256"
+          printf 'producer=registered-idris2-glsles\nbackend_commit=2a9365096dc296824637a56cbf99a1cb3566f184\napp_commit=%s\n' \
+            "${{ github.event.pull_request.head.sha || github.sha }}" \
+            > "_/shader/fock-output/receipt.txt"
+
+      - name: Retain independent host mathematical oracle
+        run: python3 -m unittest discover -s tests -p 'test_entire_representer.py' -v
+
+      - name: Upload generated fragment and qualification receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: checked-fock-value-fragment
+          path: |
+            _/shader/fock-output/fock-value.frag
+            _/shader/fock-output/fock-value.frag.sha256
+            _/shader/fock-output/receipt.txt
+          if-no-files-found: error
