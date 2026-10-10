@@ -41,26 +41,59 @@ if (sideloadSigningAvailable && !sideloadKeystoreFile.exists()) {
 
 val wegertColorMarker = "/*__WEGERT_COLOR_CORE__*/"
 val generatedWegertAssets = layout.buildDirectory.dir("generated/wegert-assets")
+val requestedCheckedFragment = System.getenv("HOLOMORPHIC_GENERATED_FRAGMENT")
 val assembleContinuationShader = tasks.register("assembleContinuationShader") {
     val template = file("src/main/assets/continuation.frag.in")
     val colorCore = file("src/main/assets/wegert_color.glsl")
+    val checkedFragment = requestedCheckedFragment?.let { file(it) }
+    val checkedReceipt = checkedFragment?.resolveSibling("continuation.provenance")
     val output = generatedWegertAssets.map { it.file("continuation.frag") }
+    val receiptOutput = generatedWegertAssets.map { it.file("continuation.provenance") }
 
-    inputs.files(template, colorCore)
-    outputs.file(output)
+    inputs.property("shaderMode", if (checkedFragment == null) "legacy" else "checked-idris")
+    if (checkedFragment == null) {
+        inputs.files(template, colorCore)
+    } else {
+        inputs.files(checkedFragment, checkedReceipt)
+    }
+    outputs.dir(generatedWegertAssets)
 
     doLast {
-        val templateText = template.readText()
-        check(templateText.contains(wegertColorMarker)) {
-            "Continuation fragment template is missing the Wegert coloring-core marker"
-        }
-        check(templateText.indexOf(wegertColorMarker) == templateText.lastIndexOf(wegertColorMarker)) {
-            "Continuation fragment template must contain exactly one Wegert coloring-core marker"
-        }
-
         val outputFile = output.get().asFile
+        val outputReceipt = receiptOutput.get().asFile
         outputFile.parentFile.mkdirs()
-        outputFile.writeText(templateText.replace(wegertColorMarker, colorCore.readText()))
+
+        if (checkedFragment != null) {
+            check(checkedFragment.isFile) { "Requested compiled Idris fragment is absent" }
+            check(checkedReceipt != null && checkedReceipt.isFile) {
+                "Compiled shader has no exact-source/backend provenance"
+            }
+            val checkedText = checkedFragment.readText()
+            check(checkedText.contains("uniform vec2 u_holomorphic_coefficients[5];")) {
+                "Compiled Holomorphic fragment lost the five complex coefficients"
+            }
+            check(checkedText.contains("u_remote_pole_time") && checkedText.contains("void main()")) {
+                "Compiled Holomorphic fragment lost motion or its entry point"
+            }
+            check(!checkedText.contains(wegertColorMarker)) {
+                "Generated mode cannot consume the legacy handwritten shader template"
+            }
+            check(checkedReceipt.readText().contains("compiler=idris2-glsles")) {
+                "Generated fragment lacks registered-backend identity"
+            }
+            outputFile.writeText(checkedText)
+            checkedReceipt.copyTo(outputReceipt, overwrite = true)
+        } else {
+            val templateText = template.readText()
+            check(templateText.contains(wegertColorMarker)) {
+                "Continuation fragment template is missing the Wegert coloring-core marker"
+            }
+            check(templateText.indexOf(wegertColorMarker) == templateText.lastIndexOf(wegertColorMarker)) {
+                "Continuation fragment template must contain exactly one Wegert coloring-core marker"
+            }
+            outputFile.writeText(templateText.replace(wegertColorMarker, colorCore.readText()))
+            outputReceipt.delete()
+        }
     }
 }
 
