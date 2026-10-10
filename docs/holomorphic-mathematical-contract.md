@@ -272,25 +272,35 @@ The number of CPU workers is not mathematics. Three workers plus a coordinator w
 
 ## 12. Current polynomial prototype
 
-The current implementation uses
+As of 2026-10-10, the **live Android renderer** and the opt-in checked-Idris
+fragment source both use
 
 ```text
 q(u) = c1 u + c2 u^2 + ... + c5 u^5
-u = z / 6
+u = z / 3
 ```
 
-and a coefficient envelope
+with a coefficient envelope, enforced by the current native controller, of
 
 ```text
-sum_k |c_k| <= 0.72.
+sum_k |c_k| <= 6.00.
 ```
+
+The earlier `z/6`, `0.72` values describe a historical smaller-amplitude
+prototype, not the displayed live implementation. The worker's present
+candidate-search sample coordinates are still documented as `u = z/6` in
+`android/app/src/main/cpp/holomorphic_walk.c`: that different sample scale
+means its heuristic score is **not** a direct certificate of the displayed
+`z/3` perturbation. Reconcile that controller issue separately, without
+changing the field definition merely to fit the heuristic. A generated shader
+does not repair the CPU scoring discrepancy by itself.
 
 Because the basis is polynomial, every state is entire regardless of this coefficient bound. The bound is therefore not a holomorphy test.
 
 On `|u| <= 1`, the triangle inequality gives
 
 ```text
-|q(u)| <= sum_k |c_k| <= 0.72.
+|q(u)| <= sum_k |c_k| <= 6.00.
 ```
 
 So the bound is usefully interpreted as an amplitude/numerical envelope on the reference disc. Any stronger meaning must be proved separately.

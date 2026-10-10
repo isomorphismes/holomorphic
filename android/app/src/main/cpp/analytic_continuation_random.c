@@ -276,6 +276,26 @@ static bool create_renderer(struct engine *engine) {
         return false;
     }
 
+    /* This receipt is packaged beside the actually loaded continuation.frag.
+     * Legacy builds lack it and are never labeled compiler-generated. */
+    AAsset *fragment_receipt = AAssetManager_open(
+        engine->app->activity->assetManager,
+        "continuation.provenance", AASSET_MODE_BUFFER
+    );
+    if (fragment_receipt != NULL) {
+        AAsset_close(fragment_receipt);
+        char *origin = load_asset_text(
+            engine->app->activity->assetManager, "continuation.provenance"
+        );
+        if (origin == NULL) {
+            return false;
+        }
+        LOGI("holomorphic field GLSL backend selected: %s", origin);
+        free(origin);
+    } else {
+        LOGI("holomorphic field GLSL backend selected: legacy-handwritten");
+    }
+
     glGenVertexArrays(1, &engine->vao);
     glBindVertexArray(engine->vao);
     glGenBuffers(1, &engine->vbo);
