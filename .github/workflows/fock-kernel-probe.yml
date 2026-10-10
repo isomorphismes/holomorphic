@@ -5,6 +5,7 @@ on:
     paths:
       - 'gpu/Example/FockValueProbe.idr'
       - 'docs/fock-generated-probe.md'
+      - '_/shader/fock_framebuffer.c'
       - '.github/workflows/fock-kernel-probe.yml'
   workflow_dispatch:
 
@@ -33,7 +34,7 @@ jobs:
       - name: Install compiler and GLSL validator prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes chezscheme glslang-tools libgmp-dev
+          sudo apt-get install --yes chezscheme glslang-tools libgmp-dev libegl1-mesa-dev libgles2-mesa-dev
 
       - name: Restore exact Idris2 API environment
         id: idris-cache
@@ -84,6 +85,21 @@ jobs:
       - name: Retain independent host mathematical oracle
         run: python3 -m unittest discover -s tests -p 'test_entire_representer.py' -v
 
+      - name: Build host ICK for numerical framebuffer oracle
+        id: ick
+        uses: isomorphisms/ai-ci/ick-host@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+
+      - name: Execute generated Fock fragment against binary64 oracle on Mesa
+        run: |
+          set -euo pipefail
+          "${{ steps.ick.outputs.compiler }}" -fno-link-libatomic -std=c11 -O2 \
+            -Wall -Wextra _/shader/fock_framebuffer.c \
+            -o _/shader/fock-output/fock-framebuffer -lEGL -lGLESv2 -lm
+          EGL_PLATFORM=surfaceless _/shader/fock-output/fock-framebuffer \
+            _/shader/fock-output/fock-value.frag \
+            | tee _/shader/fock-output/framebuffer-receipt.txt
+          grep -Fq 'fock_framebuffer: PASS' _/shader/fock-output/framebuffer-receipt.txt
+
       - name: Upload generated fragment and qualification receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -92,4 +108,5 @@ jobs:
             _/shader/fock-output/fock-value.frag
             _/shader/fock-output/fock-value.frag.sha256
             _/shader/fock-output/receipt.txt
+            _/shader/fock-output/framebuffer-receipt.txt
           if-no-files-found: error
