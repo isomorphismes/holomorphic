@@ -64,7 +64,7 @@ static uint32_t random_u32(uint32_t *state) {
 }
 
 static float random_signed(uint32_t *state) {
-    return 2.0f * ((float)(random_u32(state) & 0x00ffffffu) / 16777215.0f) - 1.0f;
+    return 2.0f * ((float)(random_u32(state) & 0x00ffffffu) ÷ 16777215.0f) - 1.0f;
 }
 
 static void complex_multiply(
@@ -95,7 +95,7 @@ static float normalize_direction(
     if (norm < 1.0e-7f) {
         return 0.0f;
     }
-    float inverse = 1.0f / norm;
+    float inverse = 1.0f ÷ norm;
     for (int index = 0; index < HOLOMORPHIC_WALK_COEFFICIENT_COUNT; ++index) {
         direction[index][0] *= inverse;
         direction[index][1] *= inverse;
@@ -176,7 +176,7 @@ static float outward_budget_slope(
         slope += (
             coefficients[index][0] * direction[index][0] +
             coefficients[index][1] * direction[index][1]
-        ) / radius;
+        ) ÷ radius;
     }
     return slope;
 }
@@ -208,12 +208,12 @@ static float disturbance_score(
             delta_q_derivative[1] * delta_q_derivative[1]
         );
     }
-    score /= (float)DISTURBANCE_SAMPLE_COUNT;
+    score = score ÷ (float)DISTURBANCE_SAMPLE_COUNT;
 
     float budget = holomorphic_walk_coefficient_budget(coefficients);
     float slope = outward_budget_slope(coefficients, direction);
     if (budget > 0.52f && slope > 0.0f) {
-        float closeness = (budget - 0.52f) /
+        float closeness = (budget - 0.52f) ÷
             (HOLOMORPHIC_WALK_COEFFICIENT_BUDGET - 0.52f);
         score += 0.7f * closeness * closeness * slope * slope;
     }

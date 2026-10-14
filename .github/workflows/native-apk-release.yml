@@ -3,6 +3,8 @@ name: Build, test, and publish holomorphic-random APK
 on:
   pull_request:
     paths:
+      - '_/**'
+      - '.github/workflows/ick-compilers.yml'
       - '.github/workflows/native-apk-release.yml'
       - 'android/**'
       - 'tests/**'
@@ -32,11 +34,21 @@ env:
   RELEASE_VERSION_CODE: ${{ inputs.version_code || '3' }}
 
 jobs:
+  compilers:
+    uses: ./.github/workflows/ick-compilers.yml
+
   build:
+    needs: compilers
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Qualify the native ICK compiler
+        id: ick
+        uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
 
       - name: Check out canonical Wegert coloring core
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -64,18 +76,32 @@ jobs:
             android/app/src/main/assets/wegert_color.glsl \
             .wegert-upstream/code/wegert_color.glsl
           python -m unittest discover -s tests -v
-          cc -std=c11 -Wall -Wextra -Werror \
-            -Iandroid/app/src/main/cpp \
-            tests/test_holomorphic_walk.c \
-            android/app/src/main/cpp/holomorphic_walk.c \
-            -pthread -lm \
-            -o /tmp/test-holomorphic-walk
-          /tmp/test-holomorphic-walk
+          make -f _/ick/Makefile test ICK="${{ steps.ick.outputs.compiler }}"
           test ! -e android/app/src/main/cpp/analytic_continuation.c
           ! grep -RniE 'lasso_map|inverse_lasso|dragging_lasso|lasso_coefficients|continuation_path' android/app/src/main/cpp android/app/src/main/assets/continuation.frag.in
           grep -Fq '#define REMOTE_POLE_COUNT 24' android/app/src/main/assets/continuation.frag.in
           grep -Fq 'uniform float u_remote_pole_time;' android/app/src/main/assets/continuation.frag.in
           grep -Fq 'remote_pole_orbit_speed' android/app/src/main/assets/continuation.frag.in
+
+      - name: Check out shared ICK source producer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: isomorphisms/ai-ci
+          ref: 903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+          path: _/ai-ci-ick
+
+      - name: Download qualified compiler stages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ick-*
+          path: _/build/ick-packages
+          merge-multiple: true
+
+      - name: Restore the qualified compiler stages
+        run: |
+          make -f _/ai-ci-ick/ick-android/Makefile restore-stage ABI=armeabi-v7a ICK_STAGE="$GITHUB_WORKSPACE/_/build/ick/armeabi-v7a" ICK_ARCHIVE="$GITHUB_WORKSPACE/_/build/ick-packages/ick-armeabi-v7a.tar.gz"
+          make -f _/ai-ci-ick/ick-android/Makefile restore-stage ABI=arm64-v8a ICK_STAGE="$GITHUB_WORKSPACE/_/build/ick/arm64-v8a" ICK_ARCHIVE="$GITHUB_WORKSPACE/_/build/ick-packages/ick-arm64-v8a.tar.gz"
+          make -f _/ai-ci-ick/ick-android/Makefile restore-stage ABI=x86_64 ICK_STAGE="$GITHUB_WORKSPACE/_/build/ick/x86_64" ICK_ARCHIVE="$GITHUB_WORKSPACE/_/build/ick-packages/ick-x86_64.tar.gz"
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
@@ -95,6 +121,13 @@ jobs:
           PLAY_VERSION_CODE: ${{ env.RELEASE_VERSION_CODE }}
           PLAY_VERSION_NAME: ${{ env.RELEASE_VERSION }}
         run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Verify declared source producers
+        uses: isomorphisms/ai-ci@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+        with:
+          suite: _/ci/build-toolchain-suite.tsv
+          root: .
+
 
       - name: Verify and name APK
         run: |

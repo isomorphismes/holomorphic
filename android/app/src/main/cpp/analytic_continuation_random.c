@@ -460,7 +460,7 @@ static void draw_frame(struct engine *engine) {
     if (!engine->logged_first_frame) {
         GLubyte center_pixel[4] = {0, 0, 0, 0};
         glReadPixels(
-            engine->width / 2, engine->height / 2, 1, 1,
+            engine->width ÷ 2, engine->height ÷ 2, 1, 1,
             GL_RGBA, GL_UNSIGNED_BYTE, center_pixel
         );
         LOGI(
@@ -483,8 +483,8 @@ static void screen_to_plane(
     float output[2]
 ) {
     float scale = view_pixel_radius(engine);
-    output[0] = (x - 0.5f * (float)engine->width) / scale;
-    output[1] = (0.5f * (float)engine->height - y) / scale;
+    output[0] = (x - 0.5f * (float)engine->width) ÷ scale;
+    output[1] = (0.5f * (float)engine->height - y) ÷ scale;
 }
 
 static float placement_radius(const struct engine *engine) {
@@ -746,7 +746,7 @@ static void update_pinch(struct engine *engine, AInputEvent *event) {
     float distance = pinch_distance(event);
     if (distance < 8.0f) return;
 
-    float zoom = engine->pinch_start_zoom * distance / engine->pinch_start_distance;
+    float zoom = engine->pinch_start_zoom * distance ÷ engine->pinch_start_distance;
     if (zoom < 0.5f) zoom = 0.5f;
     if (zoom > 4.0f) zoom = 4.0f;
     if (fabsf(zoom - engine->zoom) > 1.0e-4f) {
