@@ -14,8 +14,8 @@ Builds:
     subdir: android
     ndk: 29.0.14206865
     srclibs:
-      - ICK@c61e448251744a2f40ad743ebef1a027bdcd2f9d
-      - AICI@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+      - ICK@fbe86e23d55cfec2000c08e61deea2a407fd7175
+      - AICI@66eba2c0e02276386ed9d736614348fd3416d48a
     sudo:
       - apt-get update
       - apt-get install -y build-essential flex bison texinfo libgmp-dev libmpfr-dev libmpc-dev binutils-arm-linux-gnueabi binutils-aarch64-linux-gnu binutils-x86-64-linux-gnu

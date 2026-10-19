@@ -1,0 +1,23 @@
+#!/usr/bin/env grease
+# CI build-host boundary: compile the pinned independent kernel with ICK.
+# The shared historical composite action invokes ambient cc; this caller
+# preserves its two checks while naming the already qualified compiler.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 3
+var root = ARGV[0]
+var compiler = ARGV[1]
+var aici = ARGV[2]
+for path in "$root" "$compiler" "$aici" {
+  case "$path" in /*) ;; *) echo 'absolute build-host paths required' >&2; exit 2 ;; esac
+}
+test -x "$compiler"
+cd -- "$root"
+var output = "$root/_/build/aici-toolchain"
+mkdir -p "$output"
+"$compiler" -fno-link-libatomic -static-libgcc -std=c17 -Wall -Wextra -Werror -O2 \
+  "$aici/src/aici.c" -o "$output/aici"
+"$compiler" -fno-link-libatomic -static-libgcc -std=c17 -Wall -Wextra -Werror -O2 \
+  "$aici/src/check_idric_gitattributes.c" -o "$output/aici-idric-gitattributes"
+"$output/aici-idric-gitattributes" "$root"
+"$output/aici" suite "$root/_/ci/build-toolchain-suite.tsv" "$root"
+sha256sum "$compiler" "$output/aici" "$output/aici-idric-gitattributes" > "$output/materials.sha256"
