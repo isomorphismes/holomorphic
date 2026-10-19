@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 12722)
-Total output lines: 1312
-
 #include <android/asset_manager.h>
 #include <android/input.h>
 #include <android/log.h>
@@ -624,7 +621,52 @@ static void run_numeric_probes(struct engine *engine) {
             for (int index = 0; index < 24; ++index) {
                 zeros[index][0] = case_index >= 8 ? scale * (1.0f + index * 0.0625f) : -0.75f + index * 0.0625f;
                 zeros[index][1] = case_index >= 8 ? scale * (-1.0f - index * 0.03125f) : -0.5f + index * 0.03125f;
-                poles[in…722 tokens truncated…ocation,
+                poles[index][0] = zeros[index][0] + (case_index == 2 ? 0.0f : (case_index >= 8 ? scale : 1.0f) * 0.015625f);
+                poles[index][1] = zeros[index][1] - (case_index == 2 ? 0.0f : (case_index >= 8 ? scale : 1.0f) * 0.0078125f);
+            }
+        } else if (case_index == 4) {
+            zero_count = 3;
+            memcpy(zeros[1], zeros[0], sizeof(zeros[0]));
+            memcpy(zeros[2], zeros[0], sizeof(zeros[0]));
+        } else if (case_index == 5 || case_index == 6 || case_index == 7) {
+            zeros[0][0] = -0.34375f; zeros[0][1] = 0.0f;
+            poles[0][0] = 0.34375f; poles[0][1] = 0.0f;
+            remote_count = 24;
+        }
+        float remote_positions[HOLOMORPHIC_REMOTE_POLE_COUNT][2] = {{0}};
+        for (int index = 0; index < remote_count; ++index) {
+            if (!holomorphic_remote_pole(index, time, remote_positions[index])) valid = false;
+        }
+        struct holomorphic_divisor divisor;
+        if (!valid || !holomorphic_divisor_reduce_positions(
+                &divisor, zero_count, zeros, pole_count, poles, remote_count, remote_positions)) {
+            valid = false;
+            break;
+        }
+        LOGI("HOLO_GPU_CASE case=%s coefficient_count=5 zero_count=%d pole_count=%d remote_count=%d factor_count=%d time=%.9g",
+            case_names[case_index], zero_count, pole_count, remote_count, divisor.count, time);
+        for (int index = 0; index < 5; ++index)
+            LOGI("HOLO_GPU_COEFFICIENT case=%s index=%d real=%.9g imag=%.9g",
+                case_names[case_index], index, coefficients[index][0], coefficients[index][1]);
+        for (int index = 0; index < zero_count; ++index)
+            LOGI("HOLO_GPU_INPUT case=%s kind=zero index=%d x=%.9g y=%.9g",
+                case_names[case_index], index, zeros[index][0], zeros[index][1]);
+        for (int index = 0; index < pole_count; ++index)
+            LOGI("HOLO_GPU_INPUT case=%s kind=pole index=%d x=%.9g y=%.9g",
+                case_names[case_index], index, poles[index][0], poles[index][1]);
+        for (int index = 0; index < remote_count; ++index) {
+            LOGI("HOLO_GPU_INPUT case=%s kind=remote index=%d x=%.9g y=%.9g",
+                case_names[case_index], index, remote_positions[index][0], remote_positions[index][1]);
+        }
+        for (int index = 0; index < divisor.count; ++index)
+            LOGI("HOLO_GPU_FACTOR case=%s index=%d x=%.9g y=%.9g order=%.9g",
+                case_names[case_index], index, divisor.factors[index][0],
+                divisor.factors[index][1], divisor.factors[index][2]);
+        glUniform1i(engine->zero_count_location, zero_count);
+        glUniform1i(engine->pole_count_location, pole_count);
+        glUniform2fv(engine->zero_positions_location, 32, &zeros[0][0]);
+        glUniform2fv(engine->pole_positions_location, 32, &poles[0][0]);
+        glUniform2fv(engine->remote_pole_positions_location,
             HOLOMORPHIC_REMOTE_POLE_COUNT, &remote_positions[0][0]);
         glUniform1i(engine->divisor_count_location, divisor.count);
         glUniform3fv(engine->divisor_factors_location, divisor.count, &divisor.factors[0][0]);
