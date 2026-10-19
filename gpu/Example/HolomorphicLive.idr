@@ -45,10 +45,15 @@ holomorphic_q5 point coefficients =
 ||| are formed BEFORE atan/log, even on backends that eagerly lower branches.
 factor_measure_stable : ShaderFloatTuple 2 -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 factor_measure_stable point factor =
-  let delta = subtract_components point (vec2 (x factor) (y factor))
+  let delta : ShaderFloatTuple 2
+      delta = subtract_components point (vec2 (x factor) (y factor))
+      largest : Double
       largest = maxF (absF (x delta)) (absF (y delta))
+      regular : Bool
       regular = largest > 0.0
+      safe_largest : Double
       safe_largest = if regular then largest else 1.0
+      direction : ShaderFloatTuple 2
       direction = if regular then vec2 (x delta / safe_largest)
                                          (y delta / safe_largest)
                              else vec2 1.0 0.0
