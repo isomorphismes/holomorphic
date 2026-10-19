@@ -35,49 +35,92 @@ holomorphic_q5 point coefficients =
                   (complex_multiply u
                     (vadd c4 (complex_multiply u c5))))))))
 
-hash1 : Double -> Double
-hash1 value = fractF (sinF (value * 127.1 + 31.7) * 43758.5453123)
+||| Input is an algebraically reduced divisor: (world x, world y, signed
+||| integer multiplicity). The host groups exact coordinates including all 24
+||| wandering poles, removes order-zero groups, and rejects capacity overflow.
+||| Neither camera state nor a numerical epsilon defines factor equality.
+|||
+||| The third result is the signed order at the sample: positive means a zero,
+||| negative means a pole, zero means a regular/removable point. Safe operands
+||| are formed BEFORE atan/log, even on backends that eagerly lower branches.
+factor_measure_stable : SVec 2 -> SVec 3 -> SVec 3
+factor_measure_stable point factor =
+  let delta = vsub point (vec2 (x factor) (y factor))
+      largest = maxF (absF (x delta)) (absF (y delta))
+      regular = largest > 0.0
+      safe_largest = if regular then largest else 1.0
+      direction = if regular then vec2 (x delta / safe_largest)
+                                         (y delta / safe_largest)
+                             else vec2 1.0 0.0
+      phase = atan2F (y direction) (x direction)
+      log_radius = logF safe_largest + 0.5 * logF (dot direction direction)
+      order = z factor
+      singular_order = if regular then 0.0 else order
+   in vec3 (order * phase) (order * log_radius) singular_order
 
-remote_pole_position : Double -> Double -> Double -> SVec 2
-remote_pole_position index outside_radius time =
-  let initial_angle = 6.2831853 * hash1 (index + 0.11)
-      initial_direction = vec2 (cosF initial_angle) (sinF initial_angle)
-      angle0 = atan2F (y initial_direction) (x initial_direction)
-      handedness = if hash1 (index + 7.91) < 0.5 then -1.0 else 1.0
-      speed = mixF 0.11 0.19 (hash1 (index + 4.37))
-      angle = angle0 + handedness * speed * time
-      bend_phase = 6.2831853 * hash1 (index + 11.23)
-      radial_bend = 0.22 * sinF (2.0 * angle + bend_phase)
-      radius = mixF 2.75 4.00 (hash1 (index + 1.73)) + radial_bend
-      ellipticity = mixF (-0.08) 0.08 (hash1 (index + 14.67))
-      ellipse = vec2 ((1.0 + ellipticity) * cosF angle)
-                     ((1.0 - ellipticity) * sinF angle)
-   in scale (outside_radius * radius) ellipse
-
-pole_measure : SVec 2 -> SVec 2 -> SVec 2
-pole_measure point pole =
-  let delta = vsub point pole
-      squared_radius = maxF (dot delta delta) 0.0000000000000001
-   in vec2 (atan2F (y delta) (x delta))
-           (0.5 * logF squared_radius)
-
-||| Bounded, uniform loop: 24 real remote poles, no generated-screen heuristic.
 covering
-remote_measure_from : SVec 2 -> Double -> Double -> Double ->
-                      Double -> SVec 2 -> SVec 2
-remote_measure_from point outside_radius time count index accumulated =
-  if index < minF count 24.0
+divisor_measure_from : SVec 2 -> Double -> SArray 96 (SVec 3) ->
+                       Double -> SVec 3 -> SVec 3
+divisor_measure_from point count factors index accumulated =
+  if index < minF count 96.0
      then
-       let pole = remote_pole_position index outside_radius time
-           next = vadd accumulated (pole_measure point pole)
-        in remote_measure_from point outside_radius time count
-                               (index + 1.0) next
+       let factor = array_at factors index
+           next = vadd accumulated (factor_measure_stable point factor)
+        in divisor_measure_from point count factors (index + 1.0) next
      else accumulated
 
 covering
-remote_measure_24 : SVec 2 -> Double -> Double -> SVec 2
-remote_measure_24 point outside_radius time =
-  remote_measure_from point outside_radius time 24.0 0.0 (vec2 0.0 0.0)
+public export
+holomorphic_divisor_measure : SVec 2 -> Double -> SArray 96 (SVec 3) -> SVec 3
+holomorphic_divisor_measure point count factors =
+  divisor_measure_from point count factors 0.0 (vec3 0.0 0.0 0.0)
+
+||| Numerical output, before the Wegert colour mapping. The final component
+||| identifies a usable produced sample; zero rejects nonfinite/erased output.
+||| At an actual zero/pole the first two components are finite placeholders;
+||| the signed order MUST be checked before treating them as a regular field.
+finite_marker : Double -> Double
+finite_marker value =
+  if absF value <= 3.4028234663852886e38 then 1.0 else 0.0
+
+||| This is a rejection check, not an error bound or permission to widen a
+||| tolerance. In particular, independent many-factor comparison remains
+||| necessary even when a nonzero contribution was not erased completely.
+addition_marker : Double -> Double -> Double -> Double
+addition_marker entire divisor result =
+  if absF divisor > 0.0
+     then if result == entire then 0.0 else 1.0
+     else 1.0
+
+numerical_measure : SVec 3 -> SVec 2 -> SVec 4
+numerical_measure divisor q =
+  let phase = x divisor + y q
+      log_modulus = y divisor + x q
+      usable = finite_marker phase * finite_marker log_modulus *
+               finite_marker (x q) * finite_marker (y q) *
+               addition_marker (y q) (x divisor) phase *
+               addition_marker (x q) (y divisor) log_modulus
+   in vec4 phase log_modulus (z divisor) usable
+
+covering
+public export
+holomorphic_measure : SVec 2 -> Double -> SArray 96 (SVec 3) ->
+                      SArray 5 (SVec 2) -> SVec 4
+holomorphic_measure point count factors coefficients =
+  let divisor = holomorphic_divisor_measure point count factors
+      q = holomorphic_q5 point coefficients
+   in numerical_measure divisor q
+
+||| Reduce the entire term before adding a small divisor contribution. Adding
+||| a huge q first can erase a displaced pair in binary32. This preserves only
+||| the canonical colour coordinates; holomorphic_measure retains the raw log.
+colour_measure : SVec 3 -> SVec 2 -> SVec 2
+colour_measure divisor q =
+  let phase_period = 6.28318530717958647692
+      log_period = 2.30258509299404568402
+      q_phase = y q - phase_period * floorF (y q / phase_period)
+      q_log = x q - log_period * floorF (x q / log_period)
+   in vec2 (q_phase + x divisor) (q_log + y divisor)
 
 mix_rgb : SVec 3 -> SVec 3 -> Double -> SVec 3
 mix_rgb before after weight =
@@ -120,7 +163,7 @@ draw_pole pixel center color =
 
 covering
 zero_overlays_from : SVec 2 -> SVec 2 -> Double -> Double ->
-                     SArray 64 (SVec 2) -> Double -> SVec 3 -> SVec 3
+                     SArray 32 (SVec 2) -> Double -> SVec 3 -> SVec 3
 zero_overlays_from pixel resolution pixel_radius count positions index color =
   if index < minF count 32.0
      then
@@ -133,7 +176,7 @@ zero_overlays_from pixel resolution pixel_radius count positions index color =
 
 covering
 pole_overlays_from : SVec 2 -> SVec 2 -> Double -> Double ->
-                     SArray 64 (SVec 2) -> Double -> SVec 3 -> SVec 3
+                     SArray 32 (SVec 2) -> Double -> SVec 3 -> SVec 3
 pole_overlays_from pixel resolution pixel_radius count positions index color =
   if index < minF count 32.0
      then
@@ -142,6 +185,21 @@ pole_overlays_from pixel resolution pixel_radius count positions index color =
            next = draw_pole pixel center color
         in pole_overlays_from pixel resolution pixel_radius count positions
                               (index + 1.0) next
+     else color
+
+||| Markers retain their pole identity even when an exact opposite factor
+||| removes their contribution from the reduced mathematical divisor.
+covering
+remote_overlays_from : SVec 2 -> SVec 2 -> Double -> Double ->
+                       SArray 24 (SVec 2) -> Double -> SVec 3 -> SVec 3
+remote_overlays_from pixel resolution pixel_radius count positions index color =
+  if index < minF count 24.0
+     then
+       let center = vadd (scale 0.5 resolution)
+                         (scale pixel_radius (array_at positions index))
+           next = draw_pole pixel center color
+        in remote_overlays_from pixel resolution pixel_radius count positions
+                                (index + 1.0) next
      else color
 
 draw_placement_controls : SVec 2 -> SVec 2 -> Int -> SVec 3 -> SVec 3
@@ -176,34 +234,43 @@ draw_placement_controls pixel resolution kind color =
 
 ||| The output of this ordinary checked Idris function is the real Android
 ||| fragment, not a typed copy sitting beside handwritten production GLSL.
-%export "glsles:fragment|v_ndc=in,u_resolution=uniform,u_zero_count=uniform,u_pole_count=uniform,u_zero_positions=uniform,u_pole_positions=uniform,u_holomorphic_coefficients=uniform,u_remote_pole_time=uniform,u_zoom=uniform,u_placement_kind=uniform"
+%export "glsles:fragment|v_ndc=in,u_resolution=uniform,u_zero_count=uniform,u_pole_count=uniform,u_zero_positions=uniform,u_pole_positions=uniform,u_remote_pole_positions=uniform,u_holomorphic_coefficients=uniform,u_divisor_count=uniform,u_divisor_factors=uniform,u_zoom=uniform,u_placement_kind=uniform,u_numeric_output=uniform,u_numeric_point=uniform"
 covering
 holomorphic_live : SVec 2 -> SVec 2 -> Int -> Int ->
-                   SArray 64 (SVec 2) -> SArray 64 (SVec 2) ->
-                   SArray 5 (SVec 2) -> Double -> Double -> Int -> SVec 4
-holomorphic_live ndc resolution zero_count pole_count zeros poles
-                 coefficients time zoom placement_kind =
+                   SArray 32 (SVec 2) -> SArray 32 (SVec 2) ->
+                   SArray 24 (SVec 2) -> SArray 5 (SVec 2) ->
+                   Int -> SArray 96 (SVec 3) ->
+                   Double -> Int -> Int -> SVec 2 -> SVec 4
+holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positions
+                 coefficients divisor_count factors zoom placement_kind
+                 numeric_output numeric_point =
   let pixel = scale 0.5 (vadd (vec2 1.0 1.0) ndc)
       fragment_pixel = vec2 (x pixel * x resolution) (y pixel * y resolution)
       pixel_radius = 0.42 * minF (x resolution) (y resolution) * zoom
-      point = scale (1.0 / pixel_radius)
-                    (vsub fragment_pixel (scale 0.5 resolution))
-      outside_radius = length (scale 0.5 resolution) / pixel_radius
-      base_measure = rational_measure point (int_to_double zero_count) zeros
-                                      (int_to_double pole_count) poles
-      remote = remote_measure_24 point outside_radius time
+      displayed_point = scale (1.0 / pixel_radius)
+                              (vsub fragment_pixel (scale 0.5 resolution))
+      numerical = int_to_double numeric_output > 0.0
+      point = if numerical then numeric_point else displayed_point
+      divisor = holomorphic_divisor_measure point (int_to_double divisor_count) factors
       q = holomorphic_q5 point coefficients
-      measure = vadd (vsub base_measure remote) (vec2 (y q) (x q))
-      wegert_color = wegert_rgb_from_measure measure
+      measure = colour_measure divisor q
+      regular_color = wegert_rgb_from_measure measure
+      wegert_color = if z divisor > 0.0 then vec3 0.0 0.0 0.0
+                     else if z divisor < 0.0 then vec3 1.0 1.0 1.0
+                     else regular_color
       with_zero_marks = zero_overlays_from fragment_pixel resolution pixel_radius
                                            (int_to_double zero_count) zeros
                                            0.0 wegert_color
       with_pole_marks = pole_overlays_from fragment_pixel resolution pixel_radius
                                            (int_to_double pole_count) poles
                                            0.0 with_zero_marks
+      with_remote_marks = remote_overlays_from fragment_pixel resolution pixel_radius
+                                               24.0 remote_positions 0.0 with_pole_marks
       color = draw_placement_controls fragment_pixel resolution placement_kind
-                                      with_pole_marks
-   in vec4 (x color) (y color) (z color) 1.0
+                                      with_remote_marks
+      numerical_sample = numerical_measure divisor q
+   in if numerical then numerical_sample
+                   else vec4 (x color) (y color) (z color) 1.0
 
 main : IO ()
 main = pure ()

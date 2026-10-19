@@ -11,12 +11,13 @@ target_include_directories(native_app_glue PUBLIC "${NATIVE_GLUE_DIR}")
 get_filename_component(APPLICATION_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 set(AICI_ICK_ROOT "${APPLICATION_ROOT}/_/ai-ci-ick" CACHE PATH "Pinned ai-ci checkout")
 set(ICK_STAGE_ROOT "${APPLICATION_ROOT}/_/build/ick" CACHE PATH "Qualified ICK ABI stages")
+set(HOLOMORPHIC_SHADER_BINDING_DIR "${APPLICATION_ROOT}/_/build/shader-binding" CACHE PATH "Generated source digest bound into native library")
 include("${AICI_ICK_ROOT}/ick-android/OwnedC.cmake")
 if(NOT ICK_COMPILER)
   ick_android_stage(ROOT "${ICK_STAGE_ROOT}/${ANDROID_ABI}" FORTIFY_SOURCE 2)
 endif()
 ick_android_objects(owned_objects NAME analytic_continuation SOURCES analytic_continuation_random.c holomorphic_walk.c
-  INCLUDES "${NATIVE_GLUE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}"
+  INCLUDES "${NATIVE_GLUE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${APPLICATION_ROOT}/_/shader" "${HOLOMORPHIC_SHADER_BINDING_DIR}"
   OPTIONS -Wall -Wextra -Wpedantic STANDARD 11)
 
 add_library(analytic_continuation SHARED ${owned_objects})

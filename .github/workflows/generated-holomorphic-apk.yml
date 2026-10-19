@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: checked-holomorphic-${{ github.ref }}
@@ -176,7 +177,31 @@ jobs:
     needs: generated-apk
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    env:
+      HOLOMORPHIC_GREASE: ${{ github.workspace }}/_/runtime/ysh
     steps:
+      - name: Check out the exact maintained emulator procedure
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      # The emulator action fixes its outer script to /usr/bin/sh. Acquire the
+      # pinned Grease artifact at this narrow bootstrap boundary; the action
+      # delegates all actual launch/selection checks to maintained Grease code.
+      - name: Acquire and verify native Grease for emulator execution
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p _/runtime
+          gh api repos/dilapidated-shed/grease/actions/artifacts/11727693085/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
+          printf '%s  %s\n' 20c526c8bae5dc32a7b3d01a39eca5bdb7ee4c63fe540f34a07af7ba8b0d0039 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
+          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
+          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
+          chmod 755 _/runtime/ysh
+
       - name: Download exact generated APK
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -210,26 +235,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -no-metrics
           script: |
-            set -euo pipefail
-            apk="artifacts/android/app/build/outputs/apk/debug/app-debug.apk"
-            test -s "$apk"
-            adb install -r "$apk"
-            adb install -r "$apk"
-            adb logcat -c
-            adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
-            timeout 35 bash -c 'until adb logcat -d | grep -Fq "holomorphic field GLSL backend selected: compiler=idris2-glsles"; do sleep 1; done'
-            sleep 3
-            adb logcat -d > generated-holomorphic-emulator.log
-            grep -Fq 'holomorphic field renderer ready:' generated-holomorphic-emulator.log
-            grep -Fq 'holomorphic field GLSL backend selected: compiler=idris2-glsles' generated-holomorphic-emulator.log
-            grep -Fq 'holomorphic field ready:' generated-holomorphic-emulator.log
-            ! grep -Eiq 'shader compilation failed|program link failed|shader uniforms unavailable|FATAL EXCEPTION' generated-holomorphic-emulator.log
-            adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r' | grep -Eq '^[0-9]+$'
-            adb exec-out screencap -p > generated-holomorphic-frame-a.png
-            sleep 2
-            adb exec-out screencap -p > generated-holomorphic-frame-b.png
-            test -s generated-holomorphic-frame-a.png
-            test -s generated-holomorphic-frame-b.png
+            env ASAN_OPTIONS=detect_leaks=0 "$HOLOMORPHIC_GREASE" "$GITHUB_WORKSPACE/_/shader/exercise-generated-emulator.grease" "$GITHUB_WORKSPACE/artifacts/android/app/build/outputs/apk/debug/app-debug.apk" "$GITHUB_WORKSPACE/artifacts/_/shader/generated/continuation.frag" "$GITHUB_WORKSPACE"
 
       - name: Upload actual app runtime evidence
         if: always()

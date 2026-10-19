@@ -1,0 +1,57 @@
+#!/usr/bin/env grease
+# android-emulator-runner fixes its outer interpreter to /usr/bin/sh. That
+# boundary invokes this maintained Grease program; shell options belong here.
+# This checks launch, exact selected source and capture, not numerical parity.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 3
+var apk = ARGV[0]
+var fragment = ARGV[1]
+var output = ARGV[2]
+test -s "$apk"
+test -s "$fragment"
+mkdir -p "$output"
+var expected_digest = $(sha256sum "$fragment" | cut -d ' ' -f 1)
+var log = "$output/generated-holomorphic-emulator.log"
+adb install -r "$apk"
+adb install -r "$apk"
+adb logcat -c
+adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
+var process = $(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r')
+printf '%s\n' "$process" | grep -Eq '^[0-9]+$'
+var attempts = 0
+var ready = false
+while (attempts < 35) {
+  printf 'HOLO_PROCESS package=org.isomorphisms.analyticcontinuation.lasso.dev pid=%s\n' "$process" > "$log"
+  adb logcat -d --pid="$process" >> "$log"
+  if grep -Fq 'holomorphic field first frame:' "$log" {
+    setvar ready = true
+    break
+  }
+  sleep 1
+  setvar attempts += 1
+}
+test "$[ready]" = true
+grep -Fq 'holomorphic field renderer ready:' "$log"
+grep -Fq 'holomorphic field GLSL backend selected: compiler=idris2-glsles fallback=none' "$log"
+grep -Fq 'holomorphic field shader bytes verified: mode=checked-idris compiler=idris2-glsles' "$log"
+grep -Fq "fragment_sha256=$expected_digest" "$log"
+grep -Fq "submission=glShaderSource fallback=none driver_readback_sha256=$expected_digest" "$log"
+grep -Fq 'holomorphic field ready:' "$log"
+if ! grep -Fq 'HOLO_GPU_NUMERIC status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN' "$log" {
+  printf 'emulator_app_launch=PASS\nemulator_numeric_output=NOT_RUN\nemulator_numeric_parity=NOT_RUN\n'
+  printf '\033[31mFAIL\033[0m required mathematical readbacks are unavailable; inspect native log\n'
+  exit 1
+}
+if grep -Eiq 'shader compilation failed|program link failed|shader uniforms unavailable|shader provenance rejected|legacy-handwritten|FATAL EXCEPTION' "$log" {
+  printf '\033[31mFAIL\033[0m generated runtime selection or rendering failed\n'
+  exit 1
+}
+test "$(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r')" = "$process"
+adb exec-out screencap -p > "$output/generated-holomorphic-frame-a.png"
+sleep 2
+test "$(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r')" = "$process"
+adb exec-out screencap -p > "$output/generated-holomorphic-frame-b.png"
+test -s "$output/generated-holomorphic-frame-a.png"
+test -s "$output/generated-holomorphic-frame-b.png"
+printf 'emulator_app_launch=PASS\nemulator_source_binding=PASS\nemulator_numeric_output=PASS\nemulator_numeric_parity=NOT_RUN\nphysical_gpu=NOT_RUN\n'
+sha256sum "$apk" "$fragment" "$log"
