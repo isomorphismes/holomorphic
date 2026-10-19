@@ -1,0 +1,86 @@
+#!/usr/bin/env grease
+# Read the signed APK with the producer's declared SDK/NDK. Never modify it.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 5
+var root = ARGV[0]
+var apk = ARGV[1]
+var source = ARGV[2]
+var backend = ARGV[3]
+var output = ARGV[4]
+for path in "$root" "$apk" "$output" {
+  case "$path" in /*) ;; *) echo 'absolute producer paths required' >&2; exit 2 ;; esac
+}
+for commit in "$source" "$backend" { printf '%s\n' "$commit" | grep -Eq '^[0-9a-f]{40}$' }
+test "$[ENV.GITHUB_REPOSITORY]" = isomorphismes/holomorphic
+test "$(git -C "$root" rev-parse HEAD)" = "$source"
+git -C "$root" diff HEAD --exit-code --quiet
+test -s "$apk"
+var sdk = ENV.ANDROID_HOME
+test -n "$sdk"
+var aapt = "$sdk/build-tools/36.0.0/aapt2"
+var signer = "$sdk/build-tools/36.0.0/apksigner"
+var readelf = "$sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+for tool in "$aapt" "$signer" "$readelf" { test -x "$tool" }
+mkdir -p "$output/native"
+var apk_digest = $(sha256sum "$apk" | cut -d ' ' -f 1)
+var apk_bytes = $(wc -c < "$apk" | tr -d '[:space:]')
+"$aapt" dump badging "$apk" > "$output/manifest-badging.txt"
+"$signer" verify --verbose --print-certs "$apk" > "$output/signature-verification.txt"
+test "$(grep -c '^package: ' "$output/manifest-badging.txt")" -eq 1
+var package_id = $(awk -F "'" '/^package: / {print $2}' "$output/manifest-badging.txt")
+var version_code = $(awk -F "'" '/^package: / {print $4}' "$output/manifest-badging.txt")
+var version_name = $(awk -F "'" '/^package: / {print $6}' "$output/manifest-badging.txt")
+test "$package_id" = org.isomorphisms.analyticcontinuation.lasso.dev
+printf '%s\n' "$version_code" | grep -Eq '^[1-9][0-9]*$'
+printf '%s\n' "$version_name" | grep -Eq '^[[:alnum:].+_-]+$'
+test "$(grep -Ec '^Signer #[0-9]+ certificate SHA-256 digest:' "$output/signature-verification.txt")" -eq 1
+var certificate = $(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$output/signature-verification.txt" | tr 'A-F' 'a-f' | tr -d ':')
+test "$certificate" = 27eee69b1cbeebc30eab35fe7eb5459c542784b4ccc68453a372cb6802ccf7cf
+unzip -p "$apk" assets/continuation.frag > "$output/packaged.frag"
+unzip -p "$apk" assets/continuation.provenance > "$output/packaged.provenance"
+cmp "$root/_/shader/generated/continuation.frag" "$output/packaged.frag"
+cmp "$root/_/shader/generated/continuation.provenance" "$output/packaged.provenance"
+var fragment_digest = $(sha256sum "$output/packaged.frag" | cut -d ' ' -f 1)
+for field in compiler backend_repo backend_commit application_repo application_commit fragment_sha256 {
+  test "$(grep -c "^$field=" "$output/packaged.provenance")" -eq 1
+}
+grep -Fxq 'compiler=idris2-glsles' "$output/packaged.provenance"
+grep -Fxq 'backend_repo=fuego-ironworks/idris-shader-backend' "$output/packaged.provenance"
+grep -Fxq 'application_repo=isomorphismes/holomorphic' "$output/packaged.provenance"
+grep -Fxq "backend_commit=$backend" "$output/packaged.provenance"
+grep -Fxq "application_commit=$source" "$output/packaged.provenance"
+grep -Fxq "fragment_sha256=$fragment_digest" "$output/packaged.provenance"
+unzip -Z1 "$apk" | grep '^lib/' | grep -v '/$' | sort > "$output/native-entries.txt"
+test -s "$output/native-entries.txt"
+for abi in armeabi-v7a arm64-v8a x86_64 {
+  grep -Fq "lib/$abi/" "$output/native-entries.txt"
+}
+printf 'schema\tholomorphic-qualification-apk-identity-v1\napplication_repo\tisomorphismes/holomorphic\napplication_commit\t%s\nbackend_repo\tfuego-ironworks/idris-shader-backend\nbackend_commit\t%s\ncompiler\tidris2-glsles\nfragment_sha256\t%s\napk_sha256\t%s\napk_bytes\t%s\npackage_id\t%s\nversion_code\t%s\nversion_name\t%s\nsigner_sha256\t%s\nabi_list\tarmeabi-v7a,arm64-v8a,x86_64\npacked_native_strip\tPASS\nphysical_gpu\tNOT_RUN\nsustained_performance\tNOT_RUN\n' \
+  "$source" "$backend" "$fragment_digest" "$apk_digest" "$apk_bytes" "$package_id" "$version_code" "$version_name" "$certificate" > "$output/producer-identity.tsv.tmp"
+while IFS= read -r entry {
+  printf '%s\n' "$entry" | grep -Eq '^lib/(armeabi-v7a|arm64-v8a|x86_64)/[[:alnum:]_.+-]+[.]so$'
+  var abi = $(printf '%s\n' "$entry" | cut -d / -f 2)
+  var native = "$output/native/$entry"
+  mkdir -p "$(dirname "$native")"
+  unzip -p "$apk" "$entry" > "$native"
+  "$readelf" --wide --sections "$native" > "$native.sections"
+  "$readelf" --file-header "$native" > "$native.header"
+  if grep -Eq '[.]debug_|[.]zdebug_|[.]symtab([[:space:]]|$)|[.]gnu_debugdata' "$native.sections" {
+    printf 'FAIL packed native payload retains non-runtime debug/symbol data: %s\n' "$entry" >&2
+    exit 1
+  }
+  case "$abi" in
+    armeabi-v7a) grep -Eq 'Class:.*ELF32' "$native.header"; grep -Eq 'Machine:.*ARM' "$native.header" ;;
+    arm64-v8a) grep -Eq 'Class:.*ELF64' "$native.header"; grep -Eq 'Machine:.*AArch64' "$native.header" ;;
+    x86_64) grep -Eq 'Class:.*ELF64' "$native.header"; grep -Eq 'Machine:.*Advanced Micro Devices X86-64' "$native.header" ;;
+  esac
+  var packed_bytes = $(wc -c < "$native" | tr -d '[:space:]')
+  var packed_digest = $(sha256sum "$native" | cut -d ' ' -f 1)
+  var original = "$root/android/app/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/$entry"
+  var original_bytes = 'NOT_RECORDED'
+  if test -f "$original" { setvar original_bytes = $(wc -c < "$original" | tr -d '[:space:]') }
+  printf 'native_payload\t%s\t%s\t%s\t%s\tstripped\t%s\n' "$abi" "$entry" "$packed_bytes" "$packed_digest" "$original_bytes" >> "$output/producer-identity.tsv.tmp"
+} < "$output/native-entries.txt"
+test "$(sha256sum "$apk" | cut -d ' ' -f 1)" = "$apk_digest"
+mv "$output/producer-identity.tsv.tmp" "$output/producer-identity.tsv"
+printf 'PASS signed checked APK identity recorded without changing APK bytes\napk_sha256=%s\napk_bytes=%s\n' "$apk_digest" "$apk_bytes"

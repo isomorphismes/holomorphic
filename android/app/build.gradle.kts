@@ -80,8 +80,18 @@ val assembleContinuationShader = tasks.register("assembleContinuationShader") {
             check(checkedText.contains("uniform vec2 u_holomorphic_coefficients[5];")) {
                 "Compiled Holomorphic fragment lost the five complex coefficients"
             }
-            check(checkedText.contains("u_remote_pole_time") && checkedText.contains("void main()")) {
-                "Compiled Holomorphic fragment lost motion or its entry point"
+            val checkedUniforms = listOf(
+                "uniform int u_divisor_count;",
+                "uniform vec3 u_divisor_factors[96];",
+                "uniform vec2 u_remote_pole_positions[24];",
+                "uniform int u_numeric_output;",
+                "uniform vec2 u_numeric_point;",
+            )
+            check(checkedUniforms.all { checkedText.contains(it) } && checkedText.contains("void main()")) {
+                "Compiled Holomorphic fragment lost its reduced divisor, world-space markers, numerical output, or entry point"
+            }
+            check(!checkedText.contains("u_remote_pole_time")) {
+                "Compiled Holomorphic fragment retains the obsolete viewport-relative pole API"
             }
             check(!checkedText.contains(wegertColorMarker)) {
                 "Generated mode cannot consume the legacy handwritten shader template"

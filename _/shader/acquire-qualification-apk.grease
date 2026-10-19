@@ -1,0 +1,113 @@
+#!/usr/bin/env grease
+# Host-only delivery check through pinned, unmodified Cat Food file acquisition.
+# The identity fixture is synthetic; this never installs or tests an Android app.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 4
+var catfood = ARGV[0]
+var publication = ARGV[1]
+var artifact = ARGV[2]
+var output = ARGV[3]
+for path in "$catfood" "$publication" "$artifact" "$output" {
+  case "$path" in /*) ;; *) echo 'absolute qualification acquisition paths required' >&2; exit 2 ;; esac
+}
+test "$(uname -s)" = Linux
+test "$(git -C "$catfood" rev-parse HEAD)" = b387f90d3973aae39ba19d370a830da627299ab1
+git -C "$catfood" diff HEAD --exit-code --quiet
+for file in android/install.sh android/check.sh tests/android-properties.sh { test -f "$catfood/$file" }
+var published = "$publication/publication.tsv"
+var identity = "$artifact/_/build/qualification-apk/producer-identity.tsv"
+var apk = "$artifact/android/app/build/outputs/apk/debug/app-debug.apk"
+for file in "$published" "$identity" "$apk" { test -s "$file" }
+var tab = $(printf '\t')
+for key in schema application_commit apk_sha256 apk_bytes release physical_gpu sustained_performance {
+  test "$(grep -c "^$key$tab" "$published")" -eq 1
+}
+grep -Fxq "schema${tab}holomorphic-qualification-publication-v1" "$published"
+grep -Fxq "physical_gpu${tab}NOT_RUN" "$published"
+grep -Fxq "sustained_performance${tab}NOT_RUN" "$published"
+var source = $(awk -F '\t' '$1 == "application_commit" {print $2}' "$published")
+var digest = $(awk -F '\t' '$1 == "apk_sha256" {print $2}' "$published")
+var bytes = $(awk -F '\t' '$1 == "apk_bytes" {print $2}' "$published")
+printf '%s\n' "$source" | grep -Eq '^[0-9a-f]{40}$'
+printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$'
+printf '%s\n' "$bytes" | grep -Eq '^[1-9][0-9]*$'
+test "$(sha256sum "$apk" | cut -d ' ' -f 1)" = "$digest"
+test "$(wc -c < "$apk" | tr -d '[:space:]')" = "$bytes"
+var tag = "qualification-holomorphic-$source-$digest"
+var apk_name = "holomorphic-checked-$source-$digest.apk"
+var receipt_name = "holomorphic-checked-$source-$digest.tsv"
+var release_url = "https://github.com/isomorphismes/holomorphic/releases/tag/$tag"
+var base_url = "https://github.com/isomorphismes/holomorphic/releases/download/$tag"
+grep -Fxq "release${tab}$release_url" "$published"
+test "$(awk -F '\t' -v name="$apk_name" '$1 == name {count++} END {print count+0}' "$published")" -eq 1
+test "$(awk -F '\t' -v name="$receipt_name" '$1 == name {count++} END {print count+0}' "$published")" -eq 1
+var apk_url = $(awk -F '\t' -v name="$apk_name" '$1 == name {print $3}' "$published")
+var receipt_url = $(awk -F '\t' -v name="$receipt_name" '$1 == name {print $3}' "$published")
+test "$apk_url" = "$base_url/$apk_name"
+test "$receipt_url" = "$base_url/$receipt_name"
+var qualified = "$publication/assets/$receipt_name"
+test -s "$qualified"
+for field in \
+  "application_repo${tab}isomorphismes/holomorphic" "application_commit${tab}$source" \
+  "apk_sha256${tab}$digest" "apk_bytes${tab}$bytes" \
+  "package_id${tab}org.isomorphisms.analyticcontinuation.lasso.dev" \
+  "signer_sha256${tab}27eee69b1cbeebc30eab35fe7eb5459c542784b4ccc68453a372cb6802ccf7cf" \
+  "physical_gpu${tab}NOT_RUN" "sustained_performance${tab}NOT_RUN" {
+  test "$(grep -Fxc "$field" "$identity")" -eq 1
+  test "$(grep -Fxc "$field" "$qualified")" -eq 1
+}
+for field in "emulator${tab}PASS" "independent_phase_log_rgba8${tab}PASS" {
+  test "$(grep -Fxc "$field" "$qualified")" -eq 1
+}
+var producer_digest = $(sha256sum "$identity" | cut -d ' ' -f 1)
+grep -Fxq "producer_identity_sha256${tab}$producer_digest" "$qualified"
+# A new empty prefix/cache is mandatory: cached bytes cannot prove publication.
+test ! -e "$output"
+umask 077
+mkdir -p "$output/manifest"
+printf 'analytic-continuation https://github.com/isomorphismes/holomorphic.git %s none\n' "$source" > "$output/manifest/tools.tsv"
+printf 'grease\truntime\tgap:qualification-scope\tgap:qualification-scope\tisolated host acquisition scope\nanalytic-continuation\truntime\tpackage:holomorphic-qualification-armv7\tpackage:holomorphic-qualification-arm64\tchecked universal APK; command exposure deferred\n' > "$output/manifest/delivery.tsv"
+for abi in armeabi-v7a arm64-v8a {
+  var package = 'holomorphic-qualification-arm64'
+  if (abi === 'armeabi-v7a') { setvar package = 'holomorphic-qualification-armv7' }
+  printf '%s\t%s\t%s\tfile\tisomorphismes/holomorphic\t%s\t%s\t%s\t%s\tholomorphic-qualification-apk\tfiles/holomorphic.apk\t-\t-\t-\tcurl\t-\t-\t-\n' \
+    "$package" "$abi" "$abi" "$source" "$source" "$apk_url" "$digest" >> "$output/manifest/packages.tsv"
+}
+awk -F '\t' 'NF != 18 {exit 1} END {if (NR != 2) exit 1}' "$output/manifest/packages.tsv"
+env CATFOOD_TOOLS="$output/manifest/tools.tsv" \
+  CATFOOD_ANDROID_DELIVERY="$output/manifest/delivery.tsv" \
+  CATFOOD_ANDROID_PACKAGES="$output/manifest/packages.tsv" \
+  sh "$catfood/android/check.sh" check > "$output/manifest-check.log" 2>&1
+cp "$catfood/tests/android-properties.sh" "$output/getprop-fixture"
+chmod 755 "$output/getprop-fixture"
+cmp "$catfood/tests/android-properties.sh" "$output/getprop-fixture"
+curl -fL --retry 2 "$receipt_url" > "$output/published-qualification.tsv"
+cmp "$qualified" "$output/published-qualification.tsv"
+var candidate = 'holomorphic-qualification-armv7'
+var prefix = "$output/prefix"
+env CATFOOD_TARGET=phone CATFOOD_GETPROP="$output/getprop-fixture" \
+  CATFOOD_DEVICE_ID=holomorphic-qualification-host-fixture \
+  CATFOOD_ROOT="$prefix" CATFOOD_CACHE="$output/cache" \
+  CATFOOD_TOOLS="$output/manifest/tools.tsv" \
+  CATFOOD_ANDROID_DELIVERY="$output/manifest/delivery.tsv" \
+  CATFOOD_ANDROID_PACKAGES="$output/manifest/packages.tsv" \
+  CATFOOD_ANDROID_ONLY="$candidate" CATFOOD_ANDROID_DEFER_COMMANDS=1 \
+  sh "$catfood/android/install.sh" > "$output/catfood-acquisition.log" 2>&1
+var materialized = "$prefix/packages/$candidate/$source/files/holomorphic.apk"
+test -s "$materialized"
+test ! -x "$materialized"
+test "$(find "$prefix/bin" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d '[:space:]')" -eq 0
+test "$(sha256sum "$materialized" | cut -d ' ' -f 1)" = "$digest"
+test "$(wc -c < "$materialized" | tr -d '[:space:]')" = "$bytes"
+cmp "$apk" "$materialized"
+var receipt = "$prefix/receipts/phone-$candidate.tsv"
+for field in "publication_result${tab}PASS" "publication_evidence${tab}$apk_url" \
+  "installation_result${tab}PASS" "physical_device_result${tab}NOT_VERIFIED" \
+  "device_id${tab}holomorphic-qualification-host-fixture" {
+  grep -Fxq "$field" "$receipt"
+}
+cp "$receipt" "$output/catfood-receipt.tsv"
+var receipt_digest = $(sha256sum "$receipt" | cut -d ' ' -f 1)
+printf 'schema\tholomorphic-catfood-qualification-acquisition-v1\ncatfood_commit\tb387f90d3973aae39ba19d370a830da627299ab1\napplication_commit\t%s\napk_sha256\t%s\napk_bytes\t%s\npublic_url\t%s\nhost_file_acquisition\tPASS\ncatfood_receipt_sha256\t%s\ncommand_exposure\tDEFERRED\nidentity_fixture\tCatFood tests/android-properties.sh; synthetic host-only\nandroid_package_installation\tNOT_RUN\nphysical_gpu\tNOT_RUN\nsustained_performance\tNOT_RUN\n' \
+  "$source" "$digest" "$bytes" "$apk_url" "$receipt_digest" > "$output/acquisition.tsv"
+cat "$output/acquisition.tsv"

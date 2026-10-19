@@ -11,6 +11,11 @@ static void require(int condition, const char *label) {
 }
 
 int main(void) {
+    const unsigned char text_span[] = {'a', 'b', 'c', 0};
+    require(!holo_source_contains_nul(NULL, 0), "empty-span-needs-no-readable-byte");
+    require(!holo_source_contains_nul(text_span, 3), "terminator-outside-source-span-ignored");
+    require(holo_source_contains_nul(text_span, sizeof(text_span)), "nul-at-final-span-byte-found");
+    require(holo_source_contains_nul(text_span + 3, 1), "nul-at-first-span-byte-found");
     char digest[65];
     holo_source_sha256("", 0, digest);
     require(strcmp(digest, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") == 0, "sha256-empty-vector");

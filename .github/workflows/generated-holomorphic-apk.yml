@@ -24,9 +24,9 @@ jobs:
     uses: ./.github/workflows/ick-compilers.yml
 
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@7aafe8677a3ffd96384e3497788480b75f033785
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@710c93a68407825cba4d1855b65973212743851b
     with:
-      control-head: 7aafe8677a3ffd96384e3497788480b75f033785
+      control-head: 710c93a68407825cba4d1855b65973212743851b
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   generated-apk:
@@ -130,6 +130,16 @@ jobs:
           apk: android/app/build/outputs/apk/debug/app-debug.apk
           lane: test
 
+      - name: Check qualification publication rejection gates
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/test-qualification-publication.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/_/runtime/ysh"
+
+      - name: Inspect the unchanged signed qualification APK
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/prepare-qualification-apk.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-apk"
+
       - name: Upload APK and compiler provenance
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -139,6 +149,12 @@ jobs:
             _/shader/generated/continuation.frag
             _/shader/generated/continuation.provenance
             _/shader/generated/artifact-digests.sha256
+            _/build/qualification-apk/producer-identity.tsv
+            _/build/qualification-apk/manifest-badging.txt
+            _/build/qualification-apk/signature-verification.txt
+            _/build/qualification-apk/native-entries.txt
+            _/build/qualification-apk/native/**/*.sections
+            _/build/qualification-apk/native/**/*.header
           if-no-files-found: error
 
   emulate:
@@ -237,3 +253,80 @@ jobs:
             generated-holomorphic-frame-a.png
             generated-holomorphic-frame-b.png
           if-no-files-found: warn
+
+  qualification-publication:
+    needs: [generated-apk, emulate]
+    if: >-
+      needs.emulate.result == 'success' && github.repository == 'isomorphismes/holomorphic' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      ASAN_OPTIONS: detect_leaks=0
+    steps:
+      - name: Check out the exact accepted application source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Acquire the verified Grease engine
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p _/runtime
+          gh api repos/dilapidated-shed/grease/actions/artifacts/12192502970/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
+          printf '%s  %s\n' 295329ec3bb419d90364fcb5937eafe4306b03f68b7aaa63089dadde8082ffb5 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
+          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
+          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
+          chmod 755 _/runtime/ysh
+
+      - name: Download the exact signed APK and producer identity
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-apk
+          path: artifacts/apk
+
+      - name: Download the actual independently accepted emulator evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-emulator
+          path: artifacts/emulator
+
+      - name: Publish the unchanged qualification APK after independent acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOLOMORPHIC_EMULATOR_ACCEPTED: ${{ needs.emulate.result }}
+        run: _/runtime/ysh _/shader/publish-qualification-apk.grease "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/artifacts/emulator" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-publication"
+
+      - name: Check out the unchanged pinned Cat Food installer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: isomorphisms/catfood
+          ref: b387f90d3973aae39ba19d370a830da627299ab1
+          path: _/catfood-qualification
+          persist-credentials: false
+
+      - name: Acquire the exact public APK through isolated deferred Cat Food file mode
+        run: _/runtime/ysh _/shader/acquire-qualification-apk.grease "$GITHUB_WORKSPACE/_/catfood-qualification" "$GITHUB_WORKSPACE/_/build/qualification-publication" "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/_/build/qualification-catfood-acquisition"
+
+      - name: Preserve qualification publication identity
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: checked-idris-holomorphic-publication
+          path: |
+            _/build/qualification-publication/publication.tsv
+            _/build/qualification-publication/assets/*.tsv
+            _/build/qualification-publication/gh-version.txt
+            _/build/qualification-catfood-acquisition/acquisition.tsv
+            _/build/qualification-catfood-acquisition/catfood-receipt.tsv
+            _/build/qualification-catfood-acquisition/published-qualification.tsv
+            _/build/qualification-catfood-acquisition/manifest/**
+            _/build/qualification-catfood-acquisition/*.log
+          if-no-files-found: error
