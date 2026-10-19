@@ -10,7 +10,7 @@ import Shader.PhasePortrait
 
 %default total
 
-complex_multiply : SVec 2 -> SVec 2 -> SVec 2
+complex_multiply : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> ShaderFloatTuple 2
 complex_multiply left right =
   vec2 (x left * x right - y left * y right)
        (x left * y right + y left * x right)
@@ -18,22 +18,22 @@ complex_multiply left right =
 ||| The live five-term entire polynomial in the same fixed z/3 coordinate as
 ||| the 2026-10-10 Android renderer. Coefficient count and order are structural.
 ||| Horner evaluation changes association, not the mathematical polynomial.
-holomorphic_q5 : SVec 2 -> SArray 5 (SVec 2) -> SVec 2
+holomorphic_q5 : ShaderFloatTuple 2 -> SArray 5 (ShaderFloatTuple 2) -> ShaderFloatTuple 2
 holomorphic_q5 point coefficients =
-  let u = scale (1.0 / 3.0) point
+  let u = scale_components (1.0 / 3.0) point
       c1 = array_at coefficients 0.0
       c2 = array_at coefficients 1.0
       c3 = array_at coefficients 2.0
       c4 = array_at coefficients 3.0
       c5 = array_at coefficients 4.0
    in complex_multiply u
-        (vadd c1
+        (add_components c1
           (complex_multiply u
-            (vadd c2
+            (add_components c2
               (complex_multiply u
-                (vadd c3
+                (add_components c3
                   (complex_multiply u
-                    (vadd c4 (complex_multiply u c5))))))))
+                    (add_components c4 (complex_multiply u c5))))))))
 
 ||| Input is an algebraically reduced divisor: (world x, world y, signed
 ||| integer multiplicity). The host groups exact coordinates including all 24
@@ -43,9 +43,9 @@ holomorphic_q5 point coefficients =
 ||| The third result is the signed order at the sample: positive means a zero,
 ||| negative means a pole, zero means a regular/removable point. Safe operands
 ||| are formed BEFORE atan/log, even on backends that eagerly lower branches.
-factor_measure_stable : SVec 2 -> SVec 3 -> SVec 3
+factor_measure_stable : ShaderFloatTuple 2 -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 factor_measure_stable point factor =
-  let delta = vsub point (vec2 (x factor) (y factor))
+  let delta = subtract_components point (vec2 (x factor) (y factor))
       largest = maxF (absF (x delta)) (absF (y delta))
       regular = largest > 0.0
       safe_largest = if regular then largest else 1.0
@@ -53,25 +53,25 @@ factor_measure_stable point factor =
                                          (y delta / safe_largest)
                              else vec2 1.0 0.0
       phase = atan2F (y direction) (x direction)
-      log_radius = logF safe_largest + 0.5 * logF (dot direction direction)
+      log_radius = logF safe_largest + 0.5 * logF (component_product_sum direction direction)
       order = z factor
       singular_order = if regular then 0.0 else order
    in vec3 (order * phase) (order * log_radius) singular_order
 
 covering
-divisor_measure_from : SVec 2 -> Double -> SArray 96 (SVec 3) ->
-                       Double -> SVec 3 -> SVec 3
+divisor_measure_from : ShaderFloatTuple 2 -> Double -> SArray 96 (ShaderFloatTuple 3) ->
+                       Double -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 divisor_measure_from point count factors index accumulated =
   if index < minF count 96.0
      then
        let factor = array_at factors index
-           next = vadd accumulated (factor_measure_stable point factor)
+           next = add_components accumulated (factor_measure_stable point factor)
         in divisor_measure_from point count factors (index + 1.0) next
      else accumulated
 
 covering
 public export
-holomorphic_divisor_measure : SVec 2 -> Double -> SArray 96 (SVec 3) -> SVec 3
+holomorphic_divisor_measure : ShaderFloatTuple 2 -> Double -> SArray 96 (ShaderFloatTuple 3) -> ShaderFloatTuple 3
 holomorphic_divisor_measure point count factors =
   divisor_measure_from point count factors 0.0 (vec3 0.0 0.0 0.0)
 
@@ -92,7 +92,7 @@ addition_marker entire divisor result =
      then if result == entire then 0.0 else 1.0
      else 1.0
 
-numerical_measure : SVec 3 -> SVec 2 -> SVec 4
+numerical_measure : ShaderFloatTuple 3 -> ShaderFloatTuple 2 -> ShaderFloatTuple 4
 numerical_measure divisor q =
   let phase = x divisor + y q
       log_modulus = y divisor + x q
@@ -104,8 +104,8 @@ numerical_measure divisor q =
 
 covering
 public export
-holomorphic_measure : SVec 2 -> Double -> SArray 96 (SVec 3) ->
-                      SArray 5 (SVec 2) -> SVec 4
+holomorphic_measure : ShaderFloatTuple 2 -> Double -> SArray 96 (ShaderFloatTuple 3) ->
+                      SArray 5 (ShaderFloatTuple 2) -> ShaderFloatTuple 4
 holomorphic_measure point count factors coefficients =
   let divisor = holomorphic_divisor_measure point count factors
       q = holomorphic_q5 point coefficients
@@ -114,7 +114,7 @@ holomorphic_measure point count factors coefficients =
 ||| Reduce the entire term before adding a small divisor contribution. Adding
 ||| a huge q first can erase a displaced pair in binary32. This preserves only
 ||| the canonical colour coordinates; holomorphic_measure retains the raw log.
-colour_measure : SVec 3 -> SVec 2 -> SVec 2
+colour_measure : ShaderFloatTuple 3 -> ShaderFloatTuple 2 -> ShaderFloatTuple 2
 colour_measure divisor q =
   let phase_period = 6.28318530717958647692
       log_period = 2.30258509299404568402
@@ -122,66 +122,66 @@ colour_measure divisor q =
       q_log = x q - log_period * floorF (x q / log_period)
    in vec2 (q_phase + x divisor) (q_log + y divisor)
 
-mix_rgb : SVec 3 -> SVec 3 -> Double -> SVec 3
+mix_rgb : ShaderFloatTuple 3 -> ShaderFloatTuple 3 -> Double -> ShaderFloatTuple 3
 mix_rgb before after weight =
-  vadd (scale (1.0 - weight) before) (scale weight after)
+  add_components (scale_components (1.0 - weight) before) (scale_components weight after)
 
-circle_mask : SVec 2 -> SVec 2 -> Double -> Double
+circle_mask : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Double -> Double
 circle_mask pixel center radius =
   1.0 - smoothstepF (radius - 1.25) (radius + 1.25)
-                    (length (vsub pixel center))
+                    (euclidean_component_norm (subtract_components pixel center))
 
-ring_mask : SVec 2 -> SVec 2 -> Double -> Double -> Double
+ring_mask : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Double -> Double -> Double
 ring_mask pixel center outside inside =
   maxF 0.0 (circle_mask pixel center outside - circle_mask pixel center inside)
 
-line_mask : SVec 2 -> SVec 2 -> SVec 2 -> Double -> Double
+line_mask : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Double -> Double
 line_mask pixel start finish half_width =
-  let segment = vsub finish start
-      denominator = maxF (dot segment segment) 0.000001
-      along = clampF (dot (vsub pixel start) segment / denominator) 0.0 1.0
-      nearest = vadd start (scale along segment)
-      distance = length (vsub pixel nearest)
+  let segment = subtract_components finish start
+      denominator = maxF (component_product_sum segment segment) 0.000001
+      along = clampF (component_product_sum (subtract_components pixel start) segment / denominator) 0.0 1.0
+      nearest = add_components start (scale_components along segment)
+      distance = euclidean_component_norm (subtract_components pixel nearest)
    in 1.0 - smoothstepF (half_width - 1.0) (half_width + 1.0) distance
 
-draw_zero : SVec 2 -> SVec 2 -> Double -> SVec 3 -> SVec 3
+draw_zero : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Double -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 draw_zero pixel center radius color =
   let mark = ring_mask pixel center 9.0 5.0
       dark = mix_rgb color (vec3 0.04 0.04 0.04) mark
       highlight = ring_mask pixel center 6.8 5.5
    in mix_rgb dark (vec3 0.98 0.98 0.98) highlight
 
-draw_pole : SVec 2 -> SVec 2 -> SVec 3 -> SVec 3
+draw_pole : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 draw_pole pixel center color =
   let first = line_mask pixel
-                (vadd center (vec2 (-7.0) (-7.0)))
-                (vadd center (vec2 7.0 7.0)) 2.4
+                (add_components center (vec2 (-7.0) (-7.0)))
+                (add_components center (vec2 7.0 7.0)) 2.4
       second = line_mask pixel
-                 (vadd center (vec2 (-7.0) 7.0))
-                 (vadd center (vec2 7.0 (-7.0))) 2.4
+                 (add_components center (vec2 (-7.0) 7.0))
+                 (add_components center (vec2 7.0 (-7.0))) 2.4
    in mix_rgb color (vec3 0.04 0.04 0.04) (maxF first second)
 
 covering
-zero_overlays_from : SVec 2 -> SVec 2 -> Double -> Double ->
-                     SArray 32 (SVec 2) -> Double -> SVec 3 -> SVec 3
+zero_overlays_from : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Double -> Double ->
+                     SArray 32 (ShaderFloatTuple 2) -> Double -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 zero_overlays_from pixel resolution pixel_radius count positions index color =
   if index < minF count 32.0
      then
-       let center = vadd (scale 0.5 resolution)
-                         (scale pixel_radius (array_at positions index))
+       let center = add_components (scale_components 0.5 resolution)
+                         (scale_components pixel_radius (array_at positions index))
            next = draw_zero pixel center pixel_radius color
         in zero_overlays_from pixel resolution pixel_radius count positions
                               (index + 1.0) next
      else color
 
 covering
-pole_overlays_from : SVec 2 -> SVec 2 -> Double -> Double ->
-                     SArray 32 (SVec 2) -> Double -> SVec 3 -> SVec 3
+pole_overlays_from : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Double -> Double ->
+                     SArray 32 (ShaderFloatTuple 2) -> Double -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 pole_overlays_from pixel resolution pixel_radius count positions index color =
   if index < minF count 32.0
      then
-       let center = vadd (scale 0.5 resolution)
-                         (scale pixel_radius (array_at positions index))
+       let center = add_components (scale_components 0.5 resolution)
+                         (scale_components pixel_radius (array_at positions index))
            next = draw_pole pixel center color
         in pole_overlays_from pixel resolution pixel_radius count positions
                               (index + 1.0) next
@@ -190,19 +190,19 @@ pole_overlays_from pixel resolution pixel_radius count positions index color =
 ||| Markers retain their pole identity even when an exact opposite factor
 ||| removes their contribution from the reduced mathematical divisor.
 covering
-remote_overlays_from : SVec 2 -> SVec 2 -> Double -> Double ->
-                       SArray 24 (SVec 2) -> Double -> SVec 3 -> SVec 3
+remote_overlays_from : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Double -> Double ->
+                       SArray 24 (ShaderFloatTuple 2) -> Double -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 remote_overlays_from pixel resolution pixel_radius count positions index color =
   if index < minF count 24.0
      then
-       let center = vadd (scale 0.5 resolution)
-                         (scale pixel_radius (array_at positions index))
+       let center = add_components (scale_components 0.5 resolution)
+                         (scale_components pixel_radius (array_at positions index))
            next = draw_pole pixel center color
         in remote_overlays_from pixel resolution pixel_radius count positions
                                 (index + 1.0) next
      else color
 
-draw_placement_controls : SVec 2 -> SVec 2 -> Int -> SVec 3 -> SVec 3
+draw_placement_controls : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Int -> ShaderFloatTuple 3 -> ShaderFloatTuple 3
 draw_placement_controls pixel resolution kind color =
   let radius = clampF (0.048 * minF (x resolution) (y resolution)) 26.0 38.0
       zero_center = vec2 (radius + 16.0) (radius + 16.0)
@@ -225,31 +225,33 @@ draw_placement_controls pixel resolution kind color =
                                          else vec3 0.96 0.96 0.96
       after_pole_disk = mix_rgb after_zero_mark pole_background (pole_disk * 0.86)
       pole_a = line_mask pixel
-                 (vadd pole_center (vec2 (-9.0) (-9.0)))
-                 (vadd pole_center (vec2 9.0 9.0)) 2.2
+                 (add_components pole_center (vec2 (-9.0) (-9.0)))
+                 (add_components pole_center (vec2 9.0 9.0)) 2.2
       pole_b = line_mask pixel
-                 (vadd pole_center (vec2 (-9.0) 9.0))
-                 (vadd pole_center (vec2 9.0 (-9.0))) 2.2
+                 (add_components pole_center (vec2 (-9.0) 9.0))
+                 (add_components pole_center (vec2 9.0 (-9.0))) 2.2
    in mix_rgb after_pole_disk pole_mark_color (maxF pole_a pole_b)
 
 ||| The output of this ordinary checked Idris function is the real Android
 ||| fragment, not a typed copy sitting beside handwritten production GLSL.
 %export "glsles:fragment|v_ndc=in,u_resolution=uniform,u_zero_count=uniform,u_pole_count=uniform,u_zero_positions=uniform,u_pole_positions=uniform,u_remote_pole_positions=uniform,u_holomorphic_coefficients=uniform,u_divisor_count=uniform,u_divisor_factors=uniform,u_zoom=uniform,u_placement_kind=uniform,u_numeric_output=uniform,u_numeric_point=uniform"
 covering
-holomorphic_live : SVec 2 -> SVec 2 -> Int -> Int ->
-                   SArray 32 (SVec 2) -> SArray 32 (SVec 2) ->
-                   SArray 24 (SVec 2) -> SArray 5 (SVec 2) ->
-                   Int -> SArray 96 (SVec 3) ->
-                   Double -> Int -> Int -> SVec 2 -> SVec 4
+holomorphic_live : ShaderFloatTuple 2 -> ShaderFloatTuple 2 -> Int -> Int ->
+                   SArray 32 (ShaderFloatTuple 2) -> SArray 32 (ShaderFloatTuple 2) ->
+                   SArray 24 (ShaderFloatTuple 2) -> SArray 5 (ShaderFloatTuple 2) ->
+                   Int -> SArray 96 (ShaderFloatTuple 3) ->
+                   Double -> Int -> Int -> ShaderFloatTuple 2 -> ShaderFloatTuple 4
 holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positions
                  coefficients divisor_count factors zoom placement_kind
                  numeric_output numeric_point =
-  let pixel = scale 0.5 (vadd (vec2 1.0 1.0) ndc)
+  let pixel = scale_components 0.5 (add_components (vec2 1.0 1.0) ndc)
       fragment_pixel = vec2 (x pixel * x resolution) (y pixel * y resolution)
       pixel_radius = 0.42 * minF (x resolution) (y resolution) * zoom
-      displayed_point = scale (1.0 / pixel_radius)
-                              (vsub fragment_pixel (scale 0.5 resolution))
-      numerical = int_to_double numeric_output > 0.0
+      displayed_point = scale_components (1.0 / pixel_radius)
+                              (subtract_components fragment_pixel (scale_components 0.5 resolution))
+      numeric_mode = int_to_double numeric_output
+      numerical = numeric_mode > 0.0
+      raw_measure_output = numeric_mode == 1.0
       point = if numerical then numeric_point else displayed_point
       divisor = holomorphic_divisor_measure point (int_to_double divisor_count) factors
       q = holomorphic_q5 point coefficients
@@ -269,8 +271,9 @@ holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positio
       color = draw_placement_controls fragment_pixel resolution placement_kind
                                       with_remote_marks
       numerical_sample = numerical_measure divisor q
-   in if numerical then numerical_sample
-                   else vec4 (x color) (y color) (z color) 1.0
+   in if raw_measure_output then numerical_sample
+      else if numerical then vec4 (x wegert_color) (y wegert_color) (z wegert_color) 1.0
+      else vec4 (x color) (y color) (z color) 1.0
 
 main : IO ()
 main = pure ()

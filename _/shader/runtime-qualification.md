@@ -31,6 +31,15 @@ attachments produce `NOT_RUN`. A missing result, nonfinite number, GL error or
 produced marker other than one produces `FAIL`. `OUTPUT_READY` means numbers
 exist; independent comparison has not yet run.
 
+Diagnostic mode 2 uses the same selected program and sample point but returns
+the canonical Wegert colour before markers and placement controls. Each raw
+sample is followed by a separate draw to an `RGBA8` attachment and an actual
+`GL_UNSIGNED_BYTE` readback. Dithering is disabled during these probes, then
+restored. Positive singular order uses the live shader's black endpoint and
+negative order its white endpoint. The 34 `HOLO_GPU_COLOR` rows need independent
+comparison with the declared colour policy; merely producing the bytes does not
+pass framebuffer parity.
+
 The retained corpus has 34 numerical rows across ten cases. Every case logs its
 five coefficient pairs, original zero/pole/remote positions, and reduced uploaded
 factors before its numerical rows. `HOLO_GPU_INPUT` is the original inventory;

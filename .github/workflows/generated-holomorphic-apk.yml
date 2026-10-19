@@ -15,15 +15,22 @@ permissions:
   actions: read
 
 concurrency:
-  group: checked-holomorphic-${{ github.ref }}
+  group: checked-holomorphic-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
   compilers:
+    needs: generated-fragment
     uses: ./.github/workflows/ick-compilers.yml
 
+  generated-fragment:
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@717adc7e6c341283d3aae457c9edf324d6e52a57
+    with:
+      control-head: 717adc7e6c341283d3aae457c9edf324d6e52a57
+      application-head: ${{ github.event.pull_request.head.sha || github.sha }}
+
   generated-apk:
-    needs: compilers
+    needs: [compilers, generated-fragment]
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -33,71 +40,28 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Check out checked Idris shader compiler
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Download the actual FP Kitchen Ike generated fragment
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          repository: fuego-ironworks/idris-shader-backend
-          ref: f32f27a37a176a7b2c580aa703c5d33df9511728
-          path: _/shader/backend
-          persist-credentials: false
+          name: checked-idris-holomorphic-fragment
+          path: _/shader/generated
 
-      - name: Install Idris compiler and shader validation prerequisites
+      - name: Acquire verified Grease for the packaging checks
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes chezscheme glslang-tools libgmp-dev
-
-      - name: Cache Idris2 with matching compiler API
-        id: idris-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: ~/.idris2
-          key: holomorphic-idris2-0.8.0-chezscheme-api-v1
-
-      - name: Bootstrap checked Idris2 compiler and API
-        if: steps.idris-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch v0.8.0 https://github.com/idris-lang/Idris2.git /tmp/Idris2
-          make -C /tmp/Idris2 bootstrap SCHEME=chezscheme
-          make -C /tmp/Idris2 install
-          export PATH="$HOME/.idris2/bin:$PATH"
-          make -C /tmp/Idris2 clean
-          make -C /tmp/Idris2 all
-          make -C /tmp/Idris2 install
-          make -C /tmp/Idris2 install-api
-
-      - name: Make compiler available
-        run: echo "$HOME/.idris2/bin" >> "$GITHUB_PATH"
-
-      - name: Generate the actual Android fragment
-        run: |
-          set -euo pipefail
-          backend="_/shader/backend"
-          mkdir -p "$backend/src/Example" "_/shader/generated"
-          cp gpu/Example/HolomorphicLive.idr "$backend/src/Example/HolomorphicLive.idr"
-          idris2 --version
-          make -C "$backend" backend
-          "$backend/build/exec/idris2-glsles" --cg glsles \
-            --source-dir "$backend/src" --output-dir "_/shader/generated" \
-            "$backend/src/Example/HolomorphicLive.idr" -o continuation
-          test -s "_/shader/generated/continuation.frag"
-          glslangValidator -S frag "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec2 u_holomorphic_coefficients[5];' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec2 u_zero_positions[32];' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec2 u_pole_positions[32];' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec2 u_remote_pole_positions[24];' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform int u_divisor_count;' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec3 u_divisor_factors[96];' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform int u_numeric_output;' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec2 u_numeric_point;' "_/shader/generated/continuation.frag"
-          printf 'compiler=idris2-glsles\nbackend_repo=fuego-ironworks/idris-shader-backend\nbackend_commit=f32f27a37a176a7b2c580aa703c5d33df9511728\napplication_repo=isomorphismes/holomorphic\napplication_commit=%s\nfragment_sha256=%s\n' \
-            "${{ github.event.pull_request.head.sha || github.sha }}" \
-            "$(sha256sum _/shader/generated/continuation.frag | cut -d ' ' -f 1)" \
-            > "_/shader/generated/continuation.provenance"
+          set -eu
+          mkdir -p _/runtime
+          gh api repos/dilapidated-shed/grease/actions/artifacts/12192502970/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
+          printf '%s  %s\n' 295329ec3bb419d90364fcb5937eafe4306b03f68b7aaa63089dadde8082ffb5 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
+          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
+          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
+          chmod 755 _/runtime/ysh
 
       - name: Qualify native ICK compiler
         id: ick
-        uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
+        uses: isomorphisms/ai-ci/ick-host@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
 
       - name: Check out pinned ICK stage interface
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -155,10 +119,10 @@ jobs:
           ! grep -Fq '/*__WEGERT_COLOR_CORE__*/' "_/shader/packaged.frag"
 
       - name: Check native producer/toolchain contract
-        uses: isomorphisms/ai-ci@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
-        with:
-          suite: _/ci/build-toolchain-suite.tsv
-          root: .
+        env:
+          HOLOMORPHIC_ICK_HOST: ${{ steps.ick.outputs.compiler }}
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/check-native-toolchain.grease "$GITHUB_WORKSPACE" "$HOLOMORPHIC_ICK_HOST" "$GITHUB_WORKSPACE/_/ai-ci-ick"
 
       - name: Verify stable APK signer
         uses: isomorphisms/ai-ci/android-signing@b3af13b3ab2bac9dd7c72bf9dd855ed5a17609b5
@@ -212,6 +176,22 @@ jobs:
           name: checked-idris-holomorphic-apk
           path: artifacts
 
+      - name: Check out independent predeclared GPU acceptance
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: isomorphisms/ai-ci
+          ref: 66eba2c0e02276386ed9d736614348fd3416d48a
+          path: _/holo-aici
+          persist-credentials: false
+
+      - name: Check out exact Ithon interpreter
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: dilapidated-shed/ithon
+          ref: d6e83969f82512e920fb17b44326cb54f31d015c
+          path: _/ithon
+          persist-credentials: false
+
       - name: Prepare Android emulator
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
@@ -241,6 +221,11 @@ jobs:
           script: |
             env ASAN_OPTIONS=detect_leaks=0 "$HOLOMORPHIC_GREASE" "$GITHUB_WORKSPACE/_/shader/exercise-generated-emulator.grease" "$GITHUB_WORKSPACE/artifacts/android/app/build/outputs/apk/debug/app-debug.apk" "$GITHUB_WORKSPACE/artifacts/_/shader/generated/continuation.frag" "$GITHUB_WORKSPACE"
 
+      - name: Independently compare raw numerical and same-program colour output
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/audit-generated-emulator.grease "$GITHUB_WORKSPACE"
+
       - name: Upload actual app runtime evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -248,6 +233,7 @@ jobs:
           name: checked-idris-holomorphic-emulator
           path: |
             generated-holomorphic-emulator.log
+            generated-holomorphic-independent-acceptance.log
             generated-holomorphic-frame-a.png
             generated-holomorphic-frame-b.png
           if-no-files-found: warn

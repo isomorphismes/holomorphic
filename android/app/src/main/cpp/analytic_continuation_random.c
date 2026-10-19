@@ -563,13 +563,18 @@ static void run_numeric_probes(struct engine *engine) {
     GLint previous_framebuffer = 0, viewport[4] = {0};
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer);
     glGetIntegerv(GL_VIEWPORT, viewport);
-    GLuint framebuffer = 0, texture = 0;
+    GLuint framebuffer = 0, texture = 0, color_texture = 0;
     glGenFramebuffers(1, &framebuffer);
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1, 1, 0, GL_RGBA, GL_FLOAT, NULL);
+    glGenTextures(1, &color_texture);
+    glBindTexture(GL_TEXTURE_2D, color_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -577,6 +582,7 @@ static void run_numeric_probes(struct engine *engine) {
         glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous_framebuffer);
         glDeleteFramebuffers(1, &framebuffer);
         glDeleteTextures(1, &texture);
+        glDeleteTextures(1, &color_texture);
         return;
     }
     static const float coefficients[5][2] = {
@@ -590,6 +596,8 @@ static void run_numeric_probes(struct engine *engine) {
         "one_exact", "one_displaced", "24_exact", "24_displaced", "multiplicity",
         "moving0", "moving7_5", "moving7_5_zoom", "24_displaced_large", "24_displaced_small"
     };
+    GLboolean previous_dither = glIsEnabled(GL_DITHER);
+    glDisable(GL_DITHER);
     glViewport(0, 0, 1, 1);
     glUseProgram(engine->program);
     glBindVertexArray(engine->vao);
@@ -597,6 +605,7 @@ static void run_numeric_probes(struct engine *engine) {
     glUniform2f(engine->resolution_location, 1.0f, 1.0f);
     glUniform2fv(engine->holomorphic_coefficients_location, 5, &coefficients[0][0]);
     int produced_samples = 0;
+    int produced_color_samples = 0;
     bool valid = true;
     for (int case_index = 0; case_index < 10 && valid; ++case_index) {
         float zeros[32][2] = {{0}}, poles[32][2] = {{0}};
@@ -683,15 +692,40 @@ static void run_numeric_probes(struct engine *engine) {
                 zero_count, pole_count, remote_count, result[0], result[1], result[2], result[3],
                 (unsigned int)error, readback_cpu_ms);
             if (valid) ++produced_samples;
+            if (valid) {
+                /* The second diagnostic mode is the canonical colour result
+                 * before overlays in the exact same selected fragment. The
+                 * colour bytes are read from an RGBA8 attachment, never a
+                 * separate shader or a reconstruction from the raw numbers. */
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_texture, 0);
+                glUniform1i(engine->numeric_output_location, 2);
+                const GLfloat empty_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                glClearBufferfv(GL_COLOR, 0, empty_color);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+                GLubyte color[4] = {0, 0, 0, 0};
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, color);
+                GLenum color_error = glGetError();
+                valid = color_error == GL_NO_ERROR && color[3] == 255;
+                LOGI("HOLO_GPU_COLOR case=%s sample=%d red=%u green=%u blue=%u alpha=%u produced=%d gl_error=%u output_mode=2 framebuffer_format=RGBA8 conversion=glReadPixels",
+                    case_names[case_index], sample, color[0], color[1], color[2], color[3],
+                    valid ? 1 : 0, (unsigned int)color_error);
+                if (valid) ++produced_color_samples;
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+                glUniform1i(engine->numeric_output_location, 1);
+            }
         }
     }
     glUniform1i(engine->numeric_output_location, 0);
+    if (previous_dither) glEnable(GL_DITHER);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous_framebuffer);
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
     glDeleteFramebuffers(1, &framebuffer);
     glDeleteTextures(1, &texture);
+    glDeleteTextures(1, &color_texture);
     LOGI("HOLO_GPU_NUMERIC status=%s samples=%d expected=34 reference_acceptance=NOT_RUN",
         valid && produced_samples == 34 ? "OUTPUT_READY" : "FAIL", produced_samples);
+    LOGI("HOLO_GPU_COLOR_OUTPUT status=%s samples=%d expected=34 reference_acceptance=NOT_RUN",
+        valid && produced_color_samples == 34 ? "OUTPUT_READY" : "FAIL", produced_color_samples);
 }
 
 static void draw_frame(struct engine *engine) {
