@@ -111,13 +111,34 @@ while IFS="$tab" read -r ref kind commit {
   if (ref === "refs/tags/$tag") { test "$kind" = commit; test "$commit" = "$source" }
 } < "$output/tag-refs.tsv"
 if (release_id === '') {
-  "$gh" release create "$tag" --repo "$repo" --target "$source" --draft --prerelease \
-    --title "Holomorphic checked qualification $source" --notes-file "$output/release-notes.txt" > "$output/release-create.txt"
-  "$gh" api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | [.id,.tag_name] | @tsv' > "$output/releases.tsv"
-  setvar release_id = $(awk -F '\t' -v tag="$tag" '$2 == tag {print $1}' "$output/releases.tsv")
+  # The documented create endpoint returns the created object's numeric ID.
+  # Do not rediscover it through an immediately stale releases list.
+  "$gh" api --method POST "repos/$repo/releases" \
+    -f tag_name="$tag" -f target_commitish="$source" \
+    -f name="Holomorphic checked qualification $source" \
+    -F draft=true -F prerelease=true -F "body=@$output/release-notes.txt" \
+    --jq .id > "$output/release-created-id.txt" 2> "$output/release-create.stderr"
+  setvar release_id = $(cat "$output/release-created-id.txt")
 }
 printf '%s\n' "$release_id" | grep -Eq '^[0-9]+$'
-"$gh" api "repos/$repo/releases/$release_id" --jq '[.tag_name,.target_commitish,.prerelease,.draft] | @tsv' > "$output/release-metadata.tsv"
+var metadata_ready = false
+var metadata_attempt = 0
+while (metadata_attempt < 6) {
+  if "$gh" api "repos/$repo/releases/$release_id" \
+    --jq '[.tag_name,.target_commitish,.prerelease,.draft] | @tsv' \
+    > "$output/release-metadata-$metadata_attempt.tsv" \
+    2> "$output/release-metadata-$metadata_attempt.stderr" {
+    cp "$output/release-metadata-$metadata_attempt.tsv" "$output/release-metadata.tsv"
+    setvar metadata_ready = true
+    break
+  }
+  setvar metadata_attempt += 1
+  if (metadata_attempt < 6) { sleep 1 }
+}
+if (not metadata_ready) {
+  echo 'created/existing release ID could not be read after six bounded attempts; retained diagnostics' >&2
+  exit 1
+}
 test "$(cut -f 1 "$output/release-metadata.tsv")" = "$tag"
 test "$(cut -f 2 "$output/release-metadata.tsv")" = "$source"
 test "$(cut -f 3 "$output/release-metadata.tsv")" = true
@@ -138,7 +159,8 @@ for name in "$apk_name" "$receipt_name" {
   "$gh" api -H 'Accept: application/octet-stream' "repos/$repo/releases/assets/$asset_id" > "$verification/$name"
   cmp "$output/assets/$name" "$verification/$name"
 }
-if test "$(cut -f 4 "$output/release-metadata.tsv")" = true {
+var release_is_draft = $(cut -f 4 "$output/release-metadata.tsv")
+if (release_is_draft === 'true') {
   "$gh" api --method PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true --jq .html_url > "$output/release-url.txt"
 }
 "$gh" api "repos/$repo/releases/$release_id" --jq '[.tag_name,.target_commitish,.prerelease,.draft,.html_url] | @tsv' > "$output/published-release.tsv"

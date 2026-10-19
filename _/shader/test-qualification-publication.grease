@@ -1,5 +1,5 @@
 #!/usr/bin/env grease
-# Local rejection fixtures only: no Android APK, GPU result, gh mock or publish.
+# Local rejection and offline transport fixtures only: no real APK/GPU/publish.
 set -o errexit -o nounset -o pipefail
 test "$#" -eq 2
 var root = ARGV[0]
@@ -81,3 +81,4 @@ for mutation in emulator_gate missing_identity changed_apk missing_provenance mi
 }
 test ! -e "$output/rejected-publication/publication.tsv"
 printf '\033[32mPASS\033[0m nine qualification publication semantic rejection gates; real APK/SDK/gh/GPU execution NOT_RUN\n'
+"$grease" "$root/_/shader/test-qualification-publication-flow.grease" "$root" "$grease"

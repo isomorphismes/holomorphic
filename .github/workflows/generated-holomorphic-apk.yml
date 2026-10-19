@@ -321,11 +321,15 @@ jobs:
         run: _/runtime/ysh _/shader/acquire-qualification-apk.grease "$GITHUB_WORKSPACE/_/catfood-qualification" "$GITHUB_WORKSPACE/_/build/qualification-publication" "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/_/build/qualification-catfood-acquisition"
 
       - name: Preserve qualification publication identity
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: checked-idris-holomorphic-publication
           path: |
-            _/build/qualification-publication/publication.tsv
+            _/build/qualification-publication/*.tsv
+            _/build/qualification-publication/release-created-id.txt
+            _/build/qualification-publication/release-create.stderr
+            _/build/qualification-publication/release-metadata-*.stderr
             _/build/qualification-publication/assets/*.tsv
             _/build/qualification-publication/gh-version.txt
             _/build/qualification-catfood-acquisition/acquisition.tsv

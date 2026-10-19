@@ -25,7 +25,13 @@ mandatory. The receipt records `large_q_guard=PASS` and
 displaced pair's raw large-q field. A nonzero mode-3 increment proves retention
 before color conversion; equal quantized RGBA8 bytes may still be correct.
 Its deterministic tag is `qualification-holomorphic-SOURCE-APK_SHA256`, with
-both full digests. It creates a draft prerelease, uploads without `--clobber`,
+both full digests. It creates a draft prerelease through the documented REST
+endpoint and reads that response's numeric ID directly. An immediately stale
+release list cannot discard a successfully created object's identity. It reads
+metadata by that ID with at most six attempts, separated by one second, and
+retains per-attempt output/error files. The draft flag is bound before its
+conditional so strict Grease checks every command-substitution status.
+It uploads without `--clobber`,
 downloads and compares both assets, then publishes. Existing mismatched tags,
 assets or receipts reject the operation. A rerun with different evidence does
 not overwrite an earlier receipt. Unauthenticated public raw downloads are
@@ -44,17 +50,24 @@ Use the existing verified Grease artifact and engine digest through the current
 separate absolute artifact roots. Set `HOLOMORPHIC_EMULATOR_ACCEPTED` from
 `needs.emulate.result`, `GH_TOKEN` from `github.token`, and
 `ASAN_OPTIONS=detect_leaks=0`. Invoke the publication program through that
-verified Grease engine. Upload only `publication.tsv`, `assets/*.tsv` and
-`gh-version.txt` as publication evidence; never upload `gh-auth-status.txt`.
+verified Grease engine. Preserve the publication artifact with `if: always()`
+so a failed write or metadata lookup retains its diagnostics. Upload only
+`*.tsv`, `assets/*.tsv`, `gh-version.txt`, `release-created-id.txt`,
+`release-create.stderr` and `release-metadata-*.stderr` as publication evidence;
+never upload `gh-auth-status.txt`.
 
 The APK producer artifact must additionally retain
 `_/build/qualification-apk/producer-identity.tsv`, `manifest-badging.txt`,
 `signature-verification.txt`, `native-entries.txt`, and packed-ELF inspection
 `.sections`/`.header` files. Keep the existing artifact paths for the actual APK
 and generated shader. The producer invokes the inspection program immediately
-after the existing stable-signer check. The nine rejection fixtures in
-`test-qualification-publication.grease` exercise only local publication guards;
-they are never APK, shader, emulator or physical evidence.
+after the existing stable-signer check. `test-qualification-publication.grease`
+preserves its nine semantic rejection fixtures and invokes the strict Grease
+publication-flow regression. Explicit offline gh/curl transports exercise
+created-draft lookup with a stale list and one transient metadata failure,
+existing-draft resume, and existing-asset verification without recreation or
+re-upload. These are synthetic control-flow fixtures, never actual GitHub,
+APK, shader, emulator or physical evidence.
 
 ## Isolated deferred acquisition after publication
 
