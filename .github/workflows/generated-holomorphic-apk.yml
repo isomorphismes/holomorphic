@@ -24,9 +24,9 @@ jobs:
     uses: ./.github/workflows/ick-compilers.yml
 
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@ec1ef7d5375b410651dfad1081e9b2f86eff15fc
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@7aafe8677a3ffd96384e3497788480b75f033785
     with:
-      control-head: ec1ef7d5375b410651dfad1081e9b2f86eff15fc
+      control-head: 7aafe8677a3ffd96384e3497788480b75f033785
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   generated-apk:
