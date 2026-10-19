@@ -56,7 +56,9 @@ for field in \
   test "$(grep -Fxc "$field" "$identity")" -eq 1
   test "$(grep -Fxc "$field" "$qualified")" -eq 1
 }
-for field in "emulator${tab}PASS" "independent_phase_log_rgba8${tab}PASS" {
+for field in "emulator${tab}PASS" "independent_phase_log_rgba8${tab}PASS" \
+  "large_q_guard${tab}PASS" "precolour_increment_retention${tab}PASS" \
+  "raw_large_q_pair_domain${tab}RANGE_REJECTED_UNQUALIFIED" {
   test "$(grep -Fxc "$field" "$qualified")" -eq 1
 }
 var producer_digest = $(sha256sum "$identity" | cut -d ' ' -f 1)
@@ -108,6 +110,6 @@ for field in "publication_result${tab}PASS" "publication_evidence${tab}$apk_url"
 }
 cp "$receipt" "$output/catfood-receipt.tsv"
 var receipt_digest = $(sha256sum "$receipt" | cut -d ' ' -f 1)
-printf 'schema\tholomorphic-catfood-qualification-acquisition-v1\ncatfood_commit\tb387f90d3973aae39ba19d370a830da627299ab1\napplication_commit\t%s\napk_sha256\t%s\napk_bytes\t%s\npublic_url\t%s\nhost_file_acquisition\tPASS\ncatfood_receipt_sha256\t%s\ncommand_exposure\tDEFERRED\nidentity_fixture\tCatFood tests/android-properties.sh; synthetic host-only\nandroid_package_installation\tNOT_RUN\nphysical_gpu\tNOT_RUN\nsustained_performance\tNOT_RUN\n' \
+printf 'schema\tholomorphic-catfood-qualification-acquisition-v1\ncatfood_commit\tb387f90d3973aae39ba19d370a830da627299ab1\napplication_commit\t%s\napk_sha256\t%s\napk_bytes\t%s\npublic_url\t%s\nhost_file_acquisition\tPASS\ncatfood_receipt_sha256\t%s\ncommand_exposure\tDEFERRED\nidentity_fixture\tCatFood tests/android-properties.sh; synthetic host-only\nraw_large_q_pair_domain\tRANGE_REJECTED_UNQUALIFIED\nandroid_package_installation\tNOT_RUN\nphysical_gpu\tNOT_RUN\nsustained_performance\tNOT_RUN\n' \
   "$source" "$digest" "$bytes" "$apk_url" "$receipt_digest" > "$output/acquisition.tsv"
 cat "$output/acquisition.tsv"

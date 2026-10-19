@@ -72,6 +72,12 @@ if ! grep -Fq 'HOLO_GPU_NUMERIC status=OUTPUT_READY samples=34 expected=34 refer
 if ! grep -Fq 'HOLO_GPU_COLOR_OUTPUT status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN' "$raw_log" {
   echo 'actual 34-sample RGBA8 output missing' >&2; exit 1
 }
+if ! grep -Fxq 'PASS separate large-q guard, precolour delta and same-program RGBA8; raw pair RANGE_REJECTED_UNQUALIFIED' "$acceptance" {
+  echo 'independent large-q guard/precolour/RGBA8 acceptance PASS missing' >&2; exit 1
+}
+if ! grep -Fq 'HOLO_GPU_LARGE_Q_OUTPUT status=OUTPUT_READY raw_samples=2 precolor_samples=2 color_samples=2 expected_cases=2 raw_pair_domain=RANGE_REJECTED_UNQUALIFIED reference_acceptance=NOT_RUN' "$raw_log" {
+  echo 'actual separate large-q raw/precolour/RGBA8 output missing' >&2; exit 1
+}
 grep -Fq "application_commit=$source" "$raw_log"
 grep -Fq "backend_commit=$expected_backend" "$raw_log"
 grep -Fq "fragment_sha256=$fragment_digest" "$raw_log"
@@ -93,9 +99,9 @@ var producer_digest = $(sha256sum "$identity" | cut -d ' ' -f 1)
 var raw_digest = $(sha256sum "$raw_log" | cut -d ' ' -f 1)
 var acceptance_digest = $(sha256sum "$acceptance" | cut -d ' ' -f 1)
 printf '%s\n' "$[ENV.GITHUB_RUN_ID]" | grep -Eq '^[0-9]+$'
-printf 'producer_identity_sha256\t%s\nqualification_kind\tchecked-apk-emulator-prerelease\nemulator\tPASS\nindependent_phase_log_rgba8\tPASS\nindependent_acceptance_commit\t66eba2c0e02276386ed9d736614348fd3416d48a\nraw_emulator_log_sha256\t%s\nindependent_acceptance_log_sha256\t%s\nqualification_run\thttps://github.com/isomorphismes/holomorphic/actions/runs/%s\nimmutability_policy\tsource-and-apk-content-addressed-never-overwrite\n' \
+printf 'producer_identity_sha256\t%s\nqualification_kind\tchecked-apk-emulator-prerelease\nemulator\tPASS\nindependent_phase_log_rgba8\tPASS\nlarge_q_guard\tPASS\nprecolour_increment_retention\tPASS\nraw_large_q_pair_domain\tRANGE_REJECTED_UNQUALIFIED\nindependent_acceptance_commit\t76043b9a16883ea8366b7c347dbf2639833d9307\nraw_emulator_log_sha256\t%s\nindependent_acceptance_log_sha256\t%s\nqualification_run\thttps://github.com/isomorphismes/holomorphic/actions/runs/%s\nimmutability_policy\tsource-and-apk-content-addressed-never-overwrite\n' \
   "$producer_digest" "$raw_digest" "$acceptance_digest" "$[ENV.GITHUB_RUN_ID]" >> "$output/assets/$receipt_name"
-printf 'Qualification APK for source %s.\n\nAPK SHA-256: %s\nAPK bytes: %s\nPackage: org.isomorphisms.analyticcontinuation.lasso.dev\nVersion: %s (%s)\n\nExact checked shader selection and the bounded phase/log/RGBA8 emulator corpus passed independent acceptance. Physical A1, C67, TAB_P10 GPUs and sustained performance: NOT_RUN. This prerelease does not claim production rollout or physical acceptance. Assets are never overwritten.\n' \
+printf 'Qualification APK for source %s.\n\nAPK SHA-256: %s\nAPK bytes: %s\nPackage: org.isomorphisms.analyticcontinuation.lasso.dev\nVersion: %s (%s)\n\nExact checked shader selection and the bounded phase/log/RGBA8 emulator corpus passed independent acceptance. The separate large-q guard and precolour increment-retention checks passed; the displaced pair raw large-q domain remains RANGE_REJECTED_UNQUALIFIED. Physical A1, C67, TAB_P10 GPUs and sustained performance: NOT_RUN. This prerelease does not claim production rollout or physical acceptance. Assets are never overwritten.\n' \
   "$source" "$apk_digest" "$apk_bytes" "$version_name" "$version_code" > "$output/release-notes.txt"
 "$gh" api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | [.id,.tag_name] | @tsv' > "$output/releases.tsv"
 var release_id = $(awk -F '\t' -v tag="$tag" '$2 == tag {print $1}' "$output/releases.tsv")

@@ -257,6 +257,7 @@ holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positio
       numeric_mode = int_to_double numeric_output
       numerical = numeric_mode > 0.0
       raw_measure_output = numeric_mode == 1.0
+      precolour_measure_output = numeric_mode == 3.0
       point = if numerical then numeric_point else displayed_point
       divisor = holomorphic_divisor_measure point (int_to_double divisor_count) factors
       q = holomorphic_q5 point coefficients
@@ -276,7 +277,13 @@ holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positio
       color = draw_placement_controls fragment_pixel resolution placement_kind
                                       with_remote_marks
       numerical_sample = numerical_measure divisor q
+      -- These are the actual inputs to the shared Wegert colour function.
+      -- Raw addition loss does not invalidate finite pre-colour coordinates.
+      precolour_sample = vec4 (x measure) (y measure) (z divisor)
+                              (finite_marker (x measure) * finite_marker (y measure) *
+                               finite_marker (z divisor))
    in if raw_measure_output then numerical_sample
+      else if precolour_measure_output then precolour_sample
       else if numerical then vec4 (x wegert_color) (y wegert_color) (z wegert_color) 1.0
       else vec4 (x color) (y color) (z color) 1.0
 

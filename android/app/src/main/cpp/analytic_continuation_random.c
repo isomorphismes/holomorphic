@@ -547,17 +547,130 @@ static float view_pixel_radius(const struct engine *engine) {
     return 0.42f * fminf((float)engine->width, (float)engine->height) * engine->zoom;
 }
 
+/* Separate large-q domain diagnostic. These rows never replace or relax the
+ * ordinary 34 mandatory produced=1 samples. The displaced pair must reject raw
+ * output when adding its small contribution to q erases it in binary32. Mode 3
+ * exposes the actual pre-Wegert measure used by mode 2 in this same program. */
+static void run_large_q_probes(
+    struct engine *engine, GLuint texture, GLuint color_texture
+) {
+    static const float coefficients[5][2] = {
+        {3.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f},
+        {0.0f, 0.0f}, {0.0f, 0.0f}
+    };
+    static const char *case_names[] = {"baseline", "pair"};
+    int raw_samples = 0, precolor_samples = 0, color_samples = 0;
+    bool valid = true;
+    glUniform2fv(engine->holomorphic_coefficients_location, 5, &coefficients[0][0]);
+    glUniform2f(engine->numeric_point_location, 1000.0f, 1000.0f);
+    glUniform1f(engine->zoom_location, 1.0f);
+    for (int case_index = 0; case_index < 2; ++case_index) {
+        const char *name = case_names[case_index];
+        float zeros[32][2] = {{0}}, poles[32][2] = {{0}};
+        float remotes[HOLOMORPHIC_REMOTE_POLE_COUNT][2] = {{0}};
+        int count = case_index;
+        poles[0][0] = 0.04f;
+        struct holomorphic_divisor divisor;
+        if (!holomorphic_divisor_reduce_positions(
+                &divisor, count, zeros, count, poles, 0, remotes)) {
+            valid = false;
+            break;
+        }
+        LOGI("HOLO_GPU_LARGE_Q_CASE case=%s point_x=1000 point_y=1000 coefficient_count=5 zero_count=%d pole_count=%d remote_count=0 factor_count=%d time=0 zoom=1",
+            name, count, count, divisor.count);
+        for (int index = 0; index < 5; ++index)
+            LOGI("HOLO_GPU_LARGE_Q_COEFFICIENT case=%s index=%d real=%.9g imag=%.9g",
+                name, index, coefficients[index][0], coefficients[index][1]);
+        for (int index = 0; index < count; ++index) {
+            LOGI("HOLO_GPU_LARGE_Q_INPUT case=%s kind=zero index=%d x=%.9g y=%.9g",
+                name, index, zeros[index][0], zeros[index][1]);
+            LOGI("HOLO_GPU_LARGE_Q_INPUT case=%s kind=pole index=%d x=%.9g y=%.9g",
+                name, index, poles[index][0], poles[index][1]);
+        }
+        for (int index = 0; index < divisor.count; ++index)
+            LOGI("HOLO_GPU_LARGE_Q_FACTOR case=%s index=%d x=%.9g y=%.9g order=%.9g",
+                name, index, divisor.factors[index][0],
+                divisor.factors[index][1], divisor.factors[index][2]);
+        glUniform1i(engine->zero_count_location, count);
+        glUniform1i(engine->pole_count_location, count);
+        glUniform2fv(engine->zero_positions_location, 32, &zeros[0][0]);
+        glUniform2fv(engine->pole_positions_location, 32, &poles[0][0]);
+        glUniform2fv(engine->remote_pole_positions_location,
+            HOLOMORPHIC_REMOTE_POLE_COUNT, &remotes[0][0]);
+        glUniform1i(engine->divisor_count_location, divisor.count);
+        glUniform3fv(engine->divisor_factors_location, divisor.count, &divisor.factors[0][0]);
+
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        GLenum float_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        const GLfloat missing[4] = {NAN, NAN, -12345.0f, -12345.0f};
+        for (int mode_index = 0; mode_index < 2; ++mode_index) {
+            int mode = mode_index == 0 ? 1 : 3;
+            glUniform1i(engine->numeric_output_location, mode);
+            glClearBufferfv(GL_COLOR, 0, missing);
+            double start = monotonic_seconds();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            GLfloat result[4] = {NAN, NAN, -12345.0f, -12345.0f};
+            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, result);
+            GLenum error = glGetError();
+            double readback_cpu_ms = (monotonic_seconds() - start) * 1000.0;
+            float expected_marker = mode == 1 && case_index == 1 ? 0.0f : 1.0f;
+            bool sample_valid = float_status == GL_FRAMEBUFFER_COMPLETE && error == GL_NO_ERROR &&
+                isfinite(result[0]) && isfinite(result[1]) && result[2] == 0.0f &&
+                result[3] == expected_marker;
+            if (mode == 1) {
+                /* This is an execution/domain guard, not the numerical oracle.
+                 * AICI independently checks the actual q and retained delta. */
+                sample_valid = sample_valid && fabsf(result[0] - 1000.0f) < 1.0f &&
+                    fabsf(result[1] - 1000.0f) < 1.0f;
+                LOGI("HOLO_GPU_LARGE_Q_RAW case=%s output_mode=1 phase=%.9g log_modulus=%.9g singular_order=%.9g produced=%.9g gl_error=%u framebuffer_status=%u framebuffer_format=RGBA32F conversion=glReadPixels readback_cpu_ms=%.9g",
+                    name, result[0], result[1], result[2], result[3],
+                    (unsigned int)error, (unsigned int)float_status, readback_cpu_ms);
+                if (sample_valid) ++raw_samples;
+            } else {
+                LOGI("HOLO_GPU_LARGE_Q_PRECOLOR case=%s output_mode=3 phase=%.9g log_modulus=%.9g singular_order=%.9g produced=%.9g gl_error=%u framebuffer_status=%u framebuffer_format=RGBA32F conversion=glReadPixels readback_cpu_ms=%.9g",
+                    name, result[0], result[1], result[2], result[3],
+                    (unsigned int)error, (unsigned int)float_status, readback_cpu_ms);
+                if (sample_valid) ++precolor_samples;
+            }
+            valid = valid && sample_valid;
+        }
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_texture, 0);
+        GLenum color_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glUniform1i(engine->numeric_output_location, 2);
+        const GLfloat missing_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        glClearBufferfv(GL_COLOR, 0, missing_color);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        GLubyte color[4] = {0, 0, 0, 0};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, color);
+        GLenum color_error = glGetError();
+        bool color_valid = color_status == GL_FRAMEBUFFER_COMPLETE &&
+            color_error == GL_NO_ERROR && color[3] == 255;
+        LOGI("HOLO_GPU_LARGE_Q_COLOR case=%s output_mode=2 red=%u green=%u blue=%u alpha=%u produced=%d gl_error=%u framebuffer_status=%u framebuffer_format=RGBA8 conversion=glReadPixels dither=disabled",
+            name, color[0], color[1], color[2], color[3], color_valid ? 1 : 0,
+            (unsigned int)color_error, (unsigned int)color_status);
+        if (color_valid) ++color_samples;
+        valid = valid && color_valid;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glUniform1i(engine->numeric_output_location, 1);
+    LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=%s raw_samples=%d precolor_samples=%d color_samples=%d expected_cases=2 raw_pair_domain=RANGE_REJECTED_UNQUALIFIED reference_acceptance=NOT_RUN",
+        valid && raw_samples == 2 && precolor_samples == 2 && color_samples == 2 ? "OUTPUT_READY" : "FAIL",
+        raw_samples, precolor_samples, color_samples);
+}
+
 /* Use the same selected live program and divisor upload path. RGB screenshots
  * are never decoded as numbers. Unsupported float attachments remain NOT_RUN.
  * Independent AICI owns the binary64 expected values and tolerances. */
 static void run_numeric_probes(struct engine *engine) {
     if (!HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
         LOGI("HOLO_GPU_NUMERIC status=NOT_RUN reason=legacy-mode");
+        LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=NOT_RUN reason=legacy-mode");
         return;
     }
     const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
     if (extensions == NULL || strstr(extensions, "GL_EXT_color_buffer_float") == NULL) {
         LOGI("HOLO_GPU_NUMERIC status=NOT_RUN reason=unsupported-float-color-buffer");
+        LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=NOT_RUN reason=unsupported-float-color-buffer");
         return;
     }
     GLint previous_framebuffer = 0, viewport[4] = {0};
@@ -579,6 +692,7 @@ static void run_numeric_probes(struct engine *engine) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         LOGI("HOLO_GPU_NUMERIC status=NOT_RUN reason=incomplete-float-framebuffer");
+        LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=NOT_RUN reason=incomplete-float-framebuffer");
         glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous_framebuffer);
         glDeleteFramebuffers(1, &framebuffer);
         glDeleteTextures(1, &texture);
@@ -715,6 +829,7 @@ static void run_numeric_probes(struct engine *engine) {
             }
         }
     }
+    run_large_q_probes(engine, texture, color_texture);
     glUniform1i(engine->numeric_output_location, 0);
     if (previous_dither) glEnable(GL_DITHER);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous_framebuffer);

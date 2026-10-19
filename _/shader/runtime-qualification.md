@@ -40,6 +40,41 @@ negative order its white endpoint. The 34 `HOLO_GPU_COLOR` rows need independent
 comparison with the declared colour policy; merely producing the bytes does not
 pass framebuffer parity.
 
+A separate mandatory large-polynomial diagnostic uses the same selected program
+at (1000, 1000), with the first coefficient (3, 0) and the remaining four zero.
+It compares an empty divisor with one zero at (0, 0) and one pole at the actual
+binary32 value of (0.04, 0), with no remote poles. Separate
+`HOLO_GPU_LARGE_Q_CASE`, `COEFFICIENT`, `INPUT` and `FACTOR` prefixes record all
+original and uploaded inputs, so these cases do not change the ordinary
+34-sample corpus or its mandatory produced marker of one.
+
+For each large-polynomial case, mode 1 records the actual raw phase/log/order
+and marker in `HOLO_GPU_LARGE_Q_RAW`. The empty-divisor marker must be one;
+the displaced-pair marker must be zero because adding its correction to the
+large raw entire term erases it in binary32. This is a rejected, unqualified
+raw domain. A zero marker never counts as qualification of that raw field.
+The float attachment is cleared to NaN, NaN and negative sentinels before each
+draw; finite actual channels near 1000, order zero, the exact expected marker,
+and successful GL operations are all required even for the expected rejection.
+An absent draw, stale result, or default-zero framebuffer cannot satisfy this
+guard.
+
+Mode 3 records the actual `colour_measure` phase/log used immediately before
+the shared Wegert conversion in `HOLO_GPU_LARGE_Q_PRECOLOR`, with an independent
+finite-output marker. It shares that measure with modes 0 and 2; it is not a
+second evaluator. Both mode-3 markers must be one. Independent acceptance must
+verify the nonzero displaced-pair phase correction near -2e-5 and log correction
+near +2e-5 before
+considering the mode-2 `HOLO_GPU_LARGE_Q_COLOR` RGBA8 readbacks. Equal quantized
+color bytes cannot prove that this small contribution survived.
+
+`HOLO_GPU_LARGE_Q_OUTPUT status=OUTPUT_READY` requires two raw, two precolor and
+two color records with successful graphics status. It explicitly records
+`raw_pair_domain=RANGE_REJECTED_UNQUALIFIED` and
+`reference_acceptance=NOT_RUN`. The independent `large-q-audit` checks these
+rows separately from the unchanged ordinary `gpu-audit`. Neither diagnostic
+qualifies a physical GPU or sustained performance.
+
 The retained corpus has 34 numerical rows across ten cases. Every case logs its
 five coefficient pairs, original zero/pole/remote positions, and reduced uploaded
 factors before its numerical rows. `HOLO_GPU_INPUT` is the original inventory;

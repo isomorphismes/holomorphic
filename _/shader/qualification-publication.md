@@ -18,6 +18,12 @@ The APK is hashed again after inspection and is never modified.
 runs only after `emulate` succeeds, using runner `gh` and ephemeral `GH_TOKEN`.
 It checks the producer identity, exact APK bytes, exact shader selection,
 independent provenance PASS and the predeclared phase/log/RGBA8 acceptance PASS.
+The separate large-q output and independent guard/precolour/RGBA8 PASS are also
+mandatory. The receipt records `large_q_guard=PASS` and
+`precolour_increment_retention=PASS` while retaining
+`raw_large_q_pair_domain=RANGE_REJECTED_UNQUALIFIED`. This does not qualify the
+displaced pair's raw large-q field. A nonzero mode-3 increment proves retention
+before color conversion; equal quantized RGBA8 bytes may still be correct.
 Its deterministic tag is `qualification-holomorphic-SOURCE-APK_SHA256`, with
 both full digests. It creates a draft prerelease, uploads without `--clobber`,
 downloads and compares both assets, then publishes. Existing mismatched tags,
@@ -46,7 +52,7 @@ The APK producer artifact must additionally retain
 `signature-verification.txt`, `native-entries.txt`, and packed-ELF inspection
 `.sections`/`.header` files. Keep the existing artifact paths for the actual APK
 and generated shader. The producer invokes the inspection program immediately
-after the existing stable-signer check. The seven rejection fixtures in
+after the existing stable-signer check. The nine rejection fixtures in
 `test-qualification-publication.grease` exercise only local publication guards;
 they are never APK, shader, emulator or physical evidence.
 

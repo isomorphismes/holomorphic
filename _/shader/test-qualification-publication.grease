@@ -25,10 +25,10 @@ printf 'schema\tholomorphic-qualification-apk-identity-v1\napplication_repo\tiso
 for abi in armeabi-v7a arm64-v8a x86_64 {
   printf 'native_payload\t%s\tlib/%s/fixture.so\t1\t%s\tstripped\tNOT_RECORDED\n' "$abi" "$abi" "$digest" >> "$output/identity-fixture.tsv"
 }
-printf 'PASS\nPASS bounded generated GPU field and same-program RGBA8 corpus; physical identity and provenance require separate receipts\n' > "$output/acceptance-fixture.log"
-printf 'HOLO_GPU_NUMERIC status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN\nHOLO_GPU_COLOR_OUTPUT status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN\napplication_commit=%s backend_commit=%s fragment_sha256=%s submission=glShaderSource fallback=none driver_readback_sha256=%s\n' \
+printf 'PASS\nPASS bounded generated GPU field and same-program RGBA8 corpus; physical identity and provenance require separate receipts\nPASS separate large-q guard, precolour delta and same-program RGBA8; raw pair RANGE_REJECTED_UNQUALIFIED\n' > "$output/acceptance-fixture.log"
+printf 'HOLO_GPU_NUMERIC status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN\nHOLO_GPU_COLOR_OUTPUT status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN\nHOLO_GPU_LARGE_Q_OUTPUT status=OUTPUT_READY raw_samples=2 precolor_samples=2 color_samples=2 expected_cases=2 raw_pair_domain=RANGE_REJECTED_UNQUALIFIED reference_acceptance=NOT_RUN\napplication_commit=%s backend_commit=%s fragment_sha256=%s submission=glShaderSource fallback=none driver_readback_sha256=%s\n' \
   "$source" "$backend" "$fragment_digest" "$fragment_digest" > "$output/raw-fixture.log"
-for mutation in emulator_gate missing_identity changed_apk missing_provenance missing_independent missing_numeric missing_rgba8 {
+for mutation in emulator_gate missing_identity changed_apk missing_provenance missing_independent missing_numeric missing_rgba8 missing_large_q_acceptance missing_large_q_output {
   cp "$output/apk-fixture" "$apk"
   cp "$output/identity-fixture.tsv" "$identity"
   cp "$output/acceptance-fixture.log" "$acceptance"
@@ -64,6 +64,14 @@ for mutation in emulator_gate missing_identity changed_apk missing_provenance mi
       sed '/^HOLO_GPU_COLOR_OUTPUT /d' "$output/raw-fixture.log" > "$raw_log"
       setvar rejection = 'actual 34-sample RGBA8 output missing'
       ;;
+    missing_large_q_acceptance)
+      sed '/^PASS separate large-q guard,/d' "$output/acceptance-fixture.log" > "$acceptance"
+      setvar rejection = 'independent large-q guard/precolour/RGBA8 acceptance PASS missing'
+      ;;
+    missing_large_q_output)
+      sed '/^HOLO_GPU_LARGE_Q_OUTPUT /d' "$output/raw-fixture.log" > "$raw_log"
+      setvar rejection = 'actual separate large-q raw/precolour/RGBA8 output missing'
+      ;;
   esac
   if env GITHUB_REPOSITORY=isomorphismes/holomorphic HOLOMORPHIC_EMULATOR_ACCEPTED="$accepted" \
     "$grease" "$root/_/shader/publish-qualification-apk.grease" "$artifact" "$emulator" "$source" "$backend" "$output/rejected-publication" > "$output/$mutation.log" 2>&1 {
@@ -72,4 +80,4 @@ for mutation in emulator_gate missing_identity changed_apk missing_provenance mi
   grep -Fq "$rejection" "$output/$mutation.log"
 }
 test ! -e "$output/rejected-publication/publication.tsv"
-printf '\033[32mPASS\033[0m seven qualification publication semantic rejection gates; real APK/SDK/gh/GPU execution NOT_RUN\n'
+printf '\033[32mPASS\033[0m nine qualification publication semantic rejection gates; real APK/SDK/gh/GPU execution NOT_RUN\n'

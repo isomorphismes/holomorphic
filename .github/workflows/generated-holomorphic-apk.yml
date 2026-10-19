@@ -27,9 +27,9 @@ jobs:
     uses: ./.github/workflows/ick-compilers.yml
 
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@ba8b0b73361903dda8619311b4e156e2b823d8e1
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@de8148fcee0e90a5a8547d3fbb33e1f9d6e36c37
     with:
-      control-head: ba8b0b73361903dda8619311b4e156e2b823d8e1
+      control-head: de8148fcee0e90a5a8547d3fbb33e1f9d6e36c37
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   generated-apk:
@@ -199,7 +199,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: isomorphisms/ai-ci
-          ref: 66eba2c0e02276386ed9d736614348fd3416d48a
+          ref: 76043b9a16883ea8366b7c347dbf2639833d9307
           path: _/holo-aici
           persist-credentials: false
 
