@@ -35,6 +35,38 @@ holomorphic_q5 point coefficients =
                   (complex_multiply u
                     (add_components c4 (complex_multiply u c5))))))))
 
+||| The four exact axes have known phases. Handle them explicitly so an
+||| implementation of atan2 cannot lose a quadrant at an axis. No epsilon
+||| changes the direction. Safe positive-axis operands are formed before the
+||| intrinsic call, including when a backend evaluates unused branches.
+direction_phase : ShaderFloatTuple 2 -> Double
+direction_phase direction =
+  let real_component : Double
+      real_component = x direction
+      imaginary_component : Double
+      imaginary_component = y direction
+      vertical_axis : Bool
+      vertical_axis = real_component == 0.0
+      horizontal_axis : Bool
+      horizontal_axis = imaginary_component == 0.0
+      safe_real_component : Double
+      safe_real_component = if vertical_axis then 1.0
+                            else if horizontal_axis then 1.0
+                            else real_component
+      safe_imaginary_component : Double
+      safe_imaginary_component = if vertical_axis then 0.0
+                                 else if horizontal_axis then 0.0
+                                 else imaginary_component
+      ordinary_phase = atan2F safe_imaginary_component safe_real_component
+   in if vertical_axis
+         then if imaginary_component > 0.0 then 1.5707963267948966
+              else if imaginary_component < 0.0 then -1.5707963267948966
+              else 0.0
+         else if horizontal_axis
+                 then if real_component < 0.0 then 3.141592653589793
+                      else 0.0
+                 else ordinary_phase
+
 ||| Input is an algebraically reduced divisor: (world x, world y, signed
 ||| integer multiplicity). The host groups exact coordinates including all 24
 ||| wandering poles, removes order-zero groups, and rejects capacity overflow.
@@ -57,7 +89,7 @@ factor_measure_stable point factor =
       direction = if regular then vec2 (x delta / safe_largest)
                                          (y delta / safe_largest)
                              else vec2 1.0 0.0
-      phase = atan2F (y direction) (x direction)
+      phase = direction_phase direction
       log_radius = logF safe_largest + 0.5 * logF (component_product_sum direction direction)
       order = z factor
       singular_order = if regular then 0.0 else order

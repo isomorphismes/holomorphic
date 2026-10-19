@@ -40,6 +40,18 @@ the final addition to q. The marker is independent of singularity order and
 does not certify an error bound. Partial accumulation error still needs the
 independent reference comparison.
 
+Actual SwiftShader execution of checked application `9873396` exposed a phase
+counterexample at `24_displaced:0`: the phase differed from the independent
+binary64 reference by approximately pi while logarithmic modulus passed. Both
+an upward vertical factor and a leftward horizontal factor occur in that sample;
+the combined observation does not identify which intrinsic endpoint lost its
+quadrant. The maintained phase function now handles all four exact coordinate
+axes explicitly and supplies safe positive-axis operands to the general atan
+call even if a backend evaluates unused branches. It uses no epsilon and keeps
+non-axis evaluation unchanged. The original 34 probes, separate large-q
+protocol and all independent tolerances remain unchanged. Fresh actual GPU
+readbacks must qualify the repair; diagnostic generation alone is insufficient.
+
 The raw numerical output still uses binary32 on this backend. A large entire
 term can exceed its ability to retain a small divisor contribution. The colour
 path reduces the entire term by the canonical phase/log periods before adding
