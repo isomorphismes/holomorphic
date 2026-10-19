@@ -83,9 +83,13 @@ jobs:
           test -s "_/shader/generated/continuation.frag"
           glslangValidator -S frag "_/shader/generated/continuation.frag"
           grep -Fq 'uniform vec2 u_holomorphic_coefficients[5];' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform float u_remote_pole_time;' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec2 u_zero_positions[64];' "_/shader/generated/continuation.frag"
-          grep -Fq 'uniform vec2 u_pole_positions[64];' "_/shader/generated/continuation.frag"
+          grep -Fq 'uniform vec2 u_zero_positions[32];' "_/shader/generated/continuation.frag"
+          grep -Fq 'uniform vec2 u_pole_positions[32];' "_/shader/generated/continuation.frag"
+          grep -Fq 'uniform vec2 u_remote_pole_positions[24];' "_/shader/generated/continuation.frag"
+          grep -Fq 'uniform int u_divisor_count;' "_/shader/generated/continuation.frag"
+          grep -Fq 'uniform vec3 u_divisor_factors[96];' "_/shader/generated/continuation.frag"
+          grep -Fq 'uniform int u_numeric_output;' "_/shader/generated/continuation.frag"
+          grep -Fq 'uniform vec2 u_numeric_point;' "_/shader/generated/continuation.frag"
           printf 'compiler=idris2-glsles\nbackend_repo=fuego-ironworks/idris-shader-backend\nbackend_commit=f32f27a37a176a7b2c580aa703c5d33df9511728\napplication_repo=isomorphismes/holomorphic\napplication_commit=%s\nfragment_sha256=%s\n' \
             "${{ github.event.pull_request.head.sha || github.sha }}" \
             "$(sha256sum _/shader/generated/continuation.frag | cut -d ' ' -f 1)" \
