@@ -9,6 +9,7 @@ on:
       - '_/oracle/**'
       - '_/tests/**'
       - '_/ci/**'
+      - 'tests/**'
       - '.github/workflows/generated-holomorphic-apk.yml'
       - '.github/workflows/ick-compilers.yml'
   workflow_dispatch:
