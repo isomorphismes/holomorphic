@@ -6,6 +6,9 @@ on:
       - 'gpu/**'
       - 'android/**'
       - '_/shader/**'
+      - '_/oracle/**'
+      - '_/tests/**'
+      - '_/ci/**'
       - '.github/workflows/generated-holomorphic-apk.yml'
       - '.github/workflows/ick-compilers.yml'
   workflow_dispatch:
@@ -24,9 +27,9 @@ jobs:
     uses: ./.github/workflows/ick-compilers.yml
 
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@710c93a68407825cba4d1855b65973212743851b
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@ba8b0b73361903dda8619311b4e156e2b823d8e1
     with:
-      control-head: 710c93a68407825cba4d1855b65973212743851b
+      control-head: ba8b0b73361903dda8619311b4e156e2b823d8e1
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   generated-apk:
