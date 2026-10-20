@@ -19,6 +19,7 @@
 #include "holomorphic_divisor.h"
 #include "holomorphic_shader_binding.h"
 #include "runtime_source_binding.h"
+#include "holo_gpu_timer.h"
 
 #define LOG_TAG "AnalyticContinuation"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -108,6 +109,7 @@ struct engine {
     bool dirty;
     bool logged_first_frame;
     bool numeric_probe_attempted;
+    struct holo_gpu_timer gpu_timer;
     uint64_t timing_frames;
     double timing_submission_cpu_ms;
     double timing_presentation_cpu_ms;
@@ -493,6 +495,9 @@ static bool initialize_display(struct engine *engine) {
         return false;
     }
 
+    holo_gpu_timer_init(&engine->gpu_timer, HOLOMORPHIC_REQUIRE_GENERATED_SHADER);
+    LOGI("HOLO_GPU_TIMER status=%s reason=%s extension=EXT_disjoint_timer_query",
+        engine->gpu_timer.enabled ? "AVAILABLE" : "NOT_RUN", engine->gpu_timer.reason);
     glViewport(0, 0, engine->width, engine->height);
     engine->dirty = true;
     LOGI(
@@ -507,6 +512,7 @@ static void terminate_display(struct engine *engine) {
         return;
     }
 
+    holo_gpu_timer_shutdown(&engine->gpu_timer);
     if (engine->vbo != 0) {
         glDeleteBuffers(1, &engine->vbo);
         engine->vbo = 0;
@@ -901,7 +907,9 @@ static void draw_frame(struct engine *engine) {
     glBindVertexArray(engine->vao);
     double submission_start = monotonic_seconds();
     if (engine->timing_window_start == 0.0) engine->timing_window_start = submission_start;
+    int gpu_query = holo_gpu_timer_begin(&engine->gpu_timer, engine->timing_frames);
     glDrawArrays(GL_TRIANGLES, 0, 3);
+    holo_gpu_timer_end(&engine->gpu_timer, gpu_query);
     engine->timing_submission_cpu_ms += (monotonic_seconds() - submission_start) * 1000.0;
 
     if (!engine->logged_first_frame) {
@@ -924,14 +932,43 @@ static void draw_frame(struct engine *engine) {
     double presentation_end = monotonic_seconds();
     engine->timing_presentation_cpu_ms += (presentation_end - presentation_start) * 1000.0;
     ++engine->timing_frames;
+    if (engine->timing_frames % 8u == 0u) holo_gpu_timer_poll(&engine->gpu_timer);
     if (engine->timing_frames == 60) {
         LOGI("HOLO_FRAME_TIMING frames=60 zero_count=%d pole_count=%d remote_count=24 reduced_factor_count=%d "
              "draw_submission_cpu_wall_ms=%.9g egl_presentation_cpu_wall_ms=%.9g frame_interval_wall_ms=%.9g "
-             "gpu_execution_ms=NOT_RUN cpu_search_ms=NOT_MEASURED thermal=NOT_RUN",
+             "gpu_execution_ms=SEE_HOLO_GPU_QUERY_WINDOW cpu_search_ms=SEE_HOLO_WORKER_CPU_WINDOW thermal=NOT_RUN",
             engine->zero_count, engine->pole_count, divisor.count,
             engine->timing_submission_cpu_ms ÷ 60.0,
             engine->timing_presentation_cpu_ms ÷ 60.0,
             (presentation_end - engine->timing_window_start) * 1000.0 ÷ 60.0);
+        struct holo_gpu_timer *timer = &engine->gpu_timer;
+        if (timer->enabled && timer->samples > 0) {
+            LOGI("HOLO_GPU_QUERY_WINDOW status=MEASURED frames=60 samples=%llu "
+                 "attempts=%llu busy=%llu rejected=%llu gpu_mean_ms=%.9g gpu_max_ms=%.9g",
+                 (unsigned long long)timer->samples, (unsigned long long)timer->attempts,
+                 (unsigned long long)timer->busy, (unsigned long long)timer->rejected,
+                 timer->total_ms / (double)timer->samples, timer->max_ms);
+        } else {
+            LOGI("HOLO_GPU_QUERY_WINDOW status=NOT_RUN frames=60 samples=%llu "
+                 "attempts=%llu busy=%llu rejected=%llu reason=%s",
+                 (unsigned long long)timer->samples, (unsigned long long)timer->attempts,
+                 (unsigned long long)timer->busy, (unsigned long long)timer->rejected,
+                 timer->enabled ? "not-ready" : timer->reason);
+        }
+        holo_gpu_timer_reset_window(timer);
+        struct holomorphic_walk_cpu_performance cpu;
+        holomorphic_walk_take_cpu_performance(&cpu);
+        if (cpu.measured > 0 && cpu.invalid == 0) {
+            LOGI("HOLO_WORKER_CPU_WINDOW status=MEASURED frames=60 searches=%llu "
+                 "cpu_clock_samples=%llu total_cpu_ms=%.9g mean_cpu_ms=%.9g",
+                 (unsigned long long)cpu.searches, (unsigned long long)cpu.measured,
+                 cpu.cpu_thread_ms, cpu.cpu_thread_ms ÷ (double)cpu.measured);
+        } else {
+            LOGI("HOLO_WORKER_CPU_WINDOW status=NOT_RUN frames=60 searches=%llu "
+                 "cpu_clock_samples=%llu invalid=%llu reason=thread-cpu-clock",
+                 (unsigned long long)cpu.searches, (unsigned long long)cpu.measured,
+                 (unsigned long long)cpu.invalid);
+        }
         engine->timing_frames = 0;
         engine->timing_submission_cpu_ms = 0.0;
         engine->timing_presentation_cpu_ms = 0.0;

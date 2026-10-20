@@ -149,3 +149,20 @@ fixtures. `test-runtime-binding.grease` compiles the actual portable native
 binding boundary through the exact ICK supplied by Kitchen, checks SHA-256
 vectors and semantic negative inputs, and executes the resulting host program.
 Fixture bytes never count as checked generation or GPU evidence.
+
+## C67 measured performance boundary (not yet exercised)
+
+The native renderer now asks the actual GLES3 driver for
+`GL_EXT_disjoint_timer_query` and logs availability. With support, it
+uses asynchronous four-slot `GL_TIME_ELAPSED_EXT` GPU time queries once
+per eight frames. `HOLO_GPU_QUERY_WINDOW` reports valid completed GPU
+measurements separately from the ordinary CPU draw-submission and EGL
+presentation wall clocks. Unsupported entrypoints, disjoint, invalid, and
+unready results are `NOT_RUN`—never replaced by `glFinish` or CPU time.
+
+Each of three background direction workers accumulates actual
+`CLOCK_THREAD_CPUTIME_ID` CPU time; `HOLO_WORKER_CPU_WINDOW` reports it
+separately every 60 displayed frames. These rows are instrumentation only.
+They do not establish C67 results until a real GE8320 application run with
+verified shader SHA, package identity, sustained multiple-window evidence,
+thermal status, and low/high divisor workloads has been captured.
