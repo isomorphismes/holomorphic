@@ -1,3 +1,24 @@
+# Build-selection contract (2026-10-20)
+
+The default Android build mode is **checked-idris**, NOT the original GLSL template.
+Its exact input is `HOLOMORPHIC_GENERATED_FRAGMENT`, obtained from the pinned
+Flexible Pipes → Kitchen/Ike workflow together with `continuation.provenance`.
+Missing inputs, unsupported modes and mismatched source/receipt material fail the
+build; they never select handwritten code. Ordinary CI APK/AAB producers use the
+same generated artifact and independently verify packaged fragment/receipt bytes.
+
+Only an intentional `HOLOMORPHIC_SHADER_MODE=legacy-reference` selects the old
+handwritten template and shared Wegert file, strictly for comparison. It cannot
+be combined with generated shader input; legacy logs explicitly identify the
+handwritten path and carry no generated-source qualification. Store/test artifacts
+are never authorized by this comparison path.
+
+Physical C67 PowerVR, live continuity, sustained frame rate, thermal behavior,
+and actual GPU time remain **NOT_RUN**, regardless of checked host/emulator PASS.
+They are gated by [FP #235](https://github.com/isomorphisms/flexible-pipes/issues/235).
+
+---
+
 # Generated source binding and numerical readback
 
 `bind-generated-fragment.grease` accepts the generated fragment, its exact

@@ -43,16 +43,29 @@ if (sideloadSigningAvailable && !sideloadKeystoreFile.exists()) {
 val wegertColorMarker = "/*__WEGERT_COLOR_CORE__*/"
 val generatedWegertAssets = layout.buildDirectory.dir("generated/wegert-assets")
 val shaderBindingHeader = rootProject.projectDir.parentFile.resolve("_/build/shader-binding/holomorphic_shader_binding.h")
+// Normal builds must consume a checked fragment from FP -> Kitchen/Ike.
+// The original hand-written GLSL is an explicit reference experiment only.
+// No build silently selects that reference when generated material is missing.
+val shaderMode = System.getenv("HOLOMORPHIC_SHADER_MODE") ?: "checked-idris"
 val requestedCheckedFragment = System.getenv("HOLOMORPHIC_GENERATED_FRAGMENT")
+check(shaderMode == "checked-idris" || shaderMode == "legacy-reference") {
+    "Unsupported HOLOMORPHIC_SHADER_MODE: $shaderMode"
+}
+check(shaderMode != "checked-idris" || !requestedCheckedFragment.isNullOrBlank()) {
+    "Default checked-idris mode requires HOLOMORPHIC_GENERATED_FRAGMENT from qualified FP / Kitchen / Ike generation; no handwritten fallback"
+}
+check(shaderMode != "legacy-reference" || requestedCheckedFragment.isNullOrBlank()) {
+    "Legacy reference mode must not consume checked fragment material"
+}
 val assembleContinuationShader = tasks.register("assembleContinuationShader") {
     val template = file("src/main/assets/continuation.frag.in")
     val colorCore = file("src/main/assets/wegert_color.glsl")
-    val checkedFragment = requestedCheckedFragment?.let { file(it) }
+    val checkedFragment = if (shaderMode == "checked-idris") file(requestedCheckedFragment!!) else null
     val checkedReceipt = checkedFragment?.resolveSibling("continuation.provenance")
     val output = generatedWegertAssets.map { it.file("continuation.frag") }
     val receiptOutput = generatedWegertAssets.map { it.file("continuation.provenance") }
 
-    inputs.property("shaderMode", if (checkedFragment == null) "legacy" else "checked-idris")
+    inputs.property("shaderMode", shaderMode)
     if (checkedFragment == null) {
         inputs.files(template, colorCore)
     } else {
@@ -125,6 +138,8 @@ val assembleContinuationShader = tasks.register("assembleContinuationShader") {
                 "#define HOLOMORPHIC_APPLICATION_COMMIT \"$applicationCommit\"\n"
             )
         } else {
+            // This code path requires positive HOLOMORPHIC_SHADER_MODE=legacy-reference.
+            // It is not the default, nor proof of generated Idriç code.
             val templateText = template.readText()
             check(templateText.contains(wegertColorMarker)) {
                 "Continuation fragment template is missing the Wegert coloring-core marker"

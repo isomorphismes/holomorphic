@@ -17,13 +17,20 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  generated-fragment:
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@08b014a891d66ecbe412d4dad383352d8791e5ec
+    with:
+      control-head: 08b014a891d66ecbe412d4dad383352d8791e5ec
+      application-head: ${{ github.event.pull_request.head.sha || github.sha }}
+
   compilers:
     uses: ./.github/workflows/ick-compilers.yml
 
   release-apk:
-    needs: compilers
+    needs: [compilers, generated-fragment]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -67,9 +74,21 @@ jobs:
       - name: Install Android build inputs
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.22.1"
 
+      - name: Consume FP / Kitchen / Ike checked Idriç fragment
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-fragment
+          path: _/shader/generated
+
       - name: Build unsigned release APK
         working-directory: android
+        env:
+          HOLOMORPHIC_GENERATED_FRAGMENT: ${{ github.workspace }}/_/shader/generated/continuation.frag
         run: ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Reject packaged shader/provenance drift
+        run: |
+          python3 _/shader/verify-packaged-fragment.py android/app/build/outputs/apk/release/app-release-unsigned.apk _/shader/generated/continuation.frag _/shader/generated/continuation.provenance
 
       - name: Verify declared source producers
         uses: isomorphisms/ai-ci@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
