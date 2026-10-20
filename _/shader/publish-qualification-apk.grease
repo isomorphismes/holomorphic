@@ -1,0 +1,189 @@
+#!/usr/bin/env grease
+# Run only in the source repository's gated GitHub publication job. This never
+# rebuilds, resigns, edits an APK, replaces an asset, or promotes a production app.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 5
+var artifact_root = ARGV[0]
+var emulator_root = ARGV[1]
+var source = ARGV[2]
+var expected_backend = ARGV[3]
+var output = ARGV[4]
+for path in "$artifact_root" "$emulator_root" "$output" {
+  case "$path" in /*) ;; *) echo 'absolute publication paths required' >&2; exit 2 ;; esac
+}
+test "$[ENV.GITHUB_REPOSITORY]" = isomorphismes/holomorphic
+if test "$[ENV.HOLOMORPHIC_EMULATOR_ACCEPTED]" != success {
+  echo 'qualification requires successful independent emulator acceptance' >&2
+  exit 1
+}
+for commit in "$source" "$expected_backend" { printf '%s\n' "$commit" | grep -Eq '^[0-9a-f]{40}$' }
+var repo = 'isomorphismes/holomorphic'
+var apk = "$artifact_root/android/app/build/outputs/apk/debug/app-debug.apk"
+var identity = "$artifact_root/_/build/qualification-apk/producer-identity.tsv"
+var raw_log = "$emulator_root/generated-holomorphic-emulator.log"
+var acceptance = "$emulator_root/generated-holomorphic-independent-acceptance.log"
+for required in "$apk" "$identity" "$raw_log" "$acceptance" {
+  if ! test -s "$required" { printf 'qualification input missing: %s\n' "$required" >&2; exit 1 }
+}
+var tab = $(printf '\t')
+for key in schema application_repo application_commit backend_repo backend_commit compiler fragment_sha256 apk_sha256 apk_bytes package_id version_code version_name signer_sha256 abi_list packed_native_strip physical_gpu sustained_performance {
+  test "$(grep -c "^$key$tab" "$identity")" -eq 1
+}
+grep -Fxq "schema${tab}holomorphic-qualification-apk-identity-v1" "$identity"
+grep -Fxq "application_repo${tab}$repo" "$identity"
+grep -Fxq "application_commit${tab}$source" "$identity"
+grep -Fxq "backend_repo${tab}fuego-ironworks/idris-shader-backend" "$identity"
+grep -Fxq "backend_commit${tab}$expected_backend" "$identity"
+grep -Fxq "compiler${tab}idris2-glsles" "$identity"
+grep -Fxq "package_id${tab}org.isomorphisms.analyticcontinuation.lasso.dev" "$identity"
+grep -Fxq "signer_sha256${tab}27eee69b1cbeebc30eab35fe7eb5459c542784b4ccc68453a372cb6802ccf7cf" "$identity"
+grep -Fxq "abi_list${tab}armeabi-v7a,arm64-v8a,x86_64" "$identity"
+grep -Fxq "packed_native_strip${tab}PASS" "$identity"
+grep -Fxq "physical_gpu${tab}NOT_RUN" "$identity"
+grep -Fxq "sustained_performance${tab}NOT_RUN" "$identity"
+var version_code = $(awk -F '\t' '$1 == "version_code" {print $2}' "$identity")
+var version_name = $(awk -F '\t' '$1 == "version_name" {print $2}' "$identity")
+printf '%s\n' "$version_code" | grep -Eq '^[1-9][0-9]*$'
+printf '%s\n' "$version_name" | grep -Eq '^[[:alnum:].+_-]+$'
+var apk_digest = $(sha256sum "$apk" | cut -d ' ' -f 1)
+var apk_bytes = $(wc -c < "$apk" | tr -d '[:space:]')
+if ! grep -Fxq "apk_sha256${tab}$apk_digest" "$identity" {
+  echo 'qualification APK SHA-256 differs from signed producer identity' >&2; exit 1
+}
+if ! grep -Fxq "apk_bytes${tab}$apk_bytes" "$identity" {
+  echo 'qualification APK size differs from signed producer identity' >&2; exit 1
+}
+var fragment = "$artifact_root/_/shader/generated/continuation.frag"
+test -s "$fragment"
+var fragment_digest = $(sha256sum "$fragment" | cut -d ' ' -f 1)
+grep -Fxq "fragment_sha256${tab}$fragment_digest" "$identity"
+for abi in armeabi-v7a arm64-v8a x86_64 {
+  test "$(awk -F '\t' -v abi="$abi" '$1 == "native_payload" && $2 == abi && $6 == "stripped" {count++} END {print count+0}' "$identity")" -ge 1
+}
+if ! grep -Fxq 'PASS' "$acceptance" {
+  echo 'independent exact-source acceptance PASS missing' >&2; exit 1
+}
+if ! grep -Fxq 'PASS bounded generated GPU field and same-program RGBA8 corpus; physical identity and provenance require separate receipts' "$acceptance" {
+  echo 'independent phase/log/RGBA8 acceptance PASS missing' >&2; exit 1
+}
+if ! grep -Fq 'HOLO_GPU_NUMERIC status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN' "$raw_log" {
+  echo 'actual 34-sample phase/log output missing' >&2; exit 1
+}
+if ! grep -Fq 'HOLO_GPU_COLOR_OUTPUT status=OUTPUT_READY samples=34 expected=34 reference_acceptance=NOT_RUN' "$raw_log" {
+  echo 'actual 34-sample RGBA8 output missing' >&2; exit 1
+}
+if ! grep -Fxq 'PASS separate large-q guard, precolour delta and same-program RGBA8; raw pair RANGE_REJECTED_UNQUALIFIED' "$acceptance" {
+  echo 'independent large-q guard/precolour/RGBA8 acceptance PASS missing' >&2; exit 1
+}
+if ! grep -Fq 'HOLO_GPU_LARGE_Q_OUTPUT status=OUTPUT_READY raw_samples=2 precolor_samples=2 color_samples=2 expected_cases=2 raw_pair_domain=RANGE_REJECTED_UNQUALIFIED reference_acceptance=NOT_RUN' "$raw_log" {
+  echo 'actual separate large-q raw/precolour/RGBA8 output missing' >&2; exit 1
+}
+grep -Fq "application_commit=$source" "$raw_log"
+grep -Fq "backend_commit=$expected_backend" "$raw_log"
+grep -Fq "fragment_sha256=$fragment_digest" "$raw_log"
+grep -Fq "submission=glShaderSource fallback=none driver_readback_sha256=$fragment_digest" "$raw_log"
+var gh = $(command -v gh)
+test -x "$gh"
+test -n "$[ENV.GH_TOKEN]"
+mkdir -p "$output/assets"
+"$gh" --version > "$output/gh-version.txt"
+# auth status does not request --show-token; its output is not published.
+"$gh" auth status --hostname github.com > "$output/gh-auth-status.txt" 2>&1
+test "$("$gh" repo view "$repo" --json nameWithOwner --jq .nameWithOwner)" = "$repo"
+var tag = "qualification-holomorphic-$source-$apk_digest"
+var apk_name = "holomorphic-checked-$source-$apk_digest.apk"
+var receipt_name = "holomorphic-checked-$source-$apk_digest.tsv"
+cp "$apk" "$output/assets/$apk_name"
+cp "$identity" "$output/assets/$receipt_name"
+var producer_digest = $(sha256sum "$identity" | cut -d ' ' -f 1)
+var raw_digest = $(sha256sum "$raw_log" | cut -d ' ' -f 1)
+var acceptance_digest = $(sha256sum "$acceptance" | cut -d ' ' -f 1)
+printf '%s\n' "$[ENV.GITHUB_RUN_ID]" | grep -Eq '^[0-9]+$'
+printf 'producer_identity_sha256\t%s\nqualification_kind\tchecked-apk-emulator-prerelease\nemulator\tPASS\nindependent_phase_log_rgba8\tPASS\nlarge_q_guard\tPASS\nprecolour_increment_retention\tPASS\nraw_large_q_pair_domain\tRANGE_REJECTED_UNQUALIFIED\nindependent_acceptance_commit\t13231c52e660ed186add95647f566b328eedbf9c\nraw_emulator_log_sha256\t%s\nindependent_acceptance_log_sha256\t%s\nqualification_run\thttps://github.com/isomorphismes/holomorphic/actions/runs/%s\nimmutability_policy\tsource-and-apk-content-addressed-never-overwrite\n' \
+  "$producer_digest" "$raw_digest" "$acceptance_digest" "$[ENV.GITHUB_RUN_ID]" >> "$output/assets/$receipt_name"
+printf 'Qualification APK for source %s.\n\nAPK SHA-256: %s\nAPK bytes: %s\nPackage: org.isomorphisms.analyticcontinuation.lasso.dev\nVersion: %s (%s)\n\nExact checked shader selection and the bounded phase/log/RGBA8 emulator corpus passed independent acceptance. The separate large-q guard and precolour increment-retention checks passed; the displaced pair raw large-q domain remains RANGE_REJECTED_UNQUALIFIED. Physical A1, C67, TAB_P10 GPUs and sustained performance: NOT_RUN. This prerelease does not claim production rollout or physical acceptance. Assets are never overwritten.\n' \
+  "$source" "$apk_digest" "$apk_bytes" "$version_name" "$version_code" > "$output/release-notes.txt"
+"$gh" api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | [.id,.tag_name] | @tsv' > "$output/releases.tsv"
+var release_id = $(awk -F '\t' -v tag="$tag" '$2 == tag {print $1}' "$output/releases.tsv")
+# Refuse an existing tag for another commit. No tag is ever moved or deleted.
+"$gh" api "repos/$repo/git/matching-refs/tags/$tag" --jq '.[] | [.ref,.object.type,.object.sha] | @tsv' > "$output/tag-refs.tsv"
+while IFS="$tab" read -r ref kind commit {
+  if (ref === "refs/tags/$tag") { test "$kind" = commit; test "$commit" = "$source" }
+} < "$output/tag-refs.tsv"
+if (release_id === '') {
+  # The documented create endpoint returns the created object's numeric ID.
+  # Do not rediscover it through an immediately stale releases list.
+  "$gh" api --method POST "repos/$repo/releases" \
+    -f tag_name="$tag" -f target_commitish="$source" \
+    -f name="Holomorphic checked qualification $source" \
+    -F draft=true -F prerelease=true -F "body=@$output/release-notes.txt" \
+    --jq .id > "$output/release-created-id.txt" 2> "$output/release-create.stderr"
+  setvar release_id = $(cat "$output/release-created-id.txt")
+}
+printf '%s\n' "$release_id" | grep -Eq '^[0-9]+$'
+var metadata_ready = false
+var metadata_attempt = 0
+while (metadata_attempt < 6) {
+  if "$gh" api "repos/$repo/releases/$release_id" \
+    --jq '[.tag_name,.target_commitish,.prerelease,.draft] | @tsv' \
+    > "$output/release-metadata-$metadata_attempt.tsv" \
+    2> "$output/release-metadata-$metadata_attempt.stderr" {
+    cp "$output/release-metadata-$metadata_attempt.tsv" "$output/release-metadata.tsv"
+    setvar metadata_ready = true
+    break
+  }
+  setvar metadata_attempt += 1
+  if (metadata_attempt < 6) { sleep 1 }
+}
+if (not metadata_ready) {
+  echo 'created/existing release ID could not be read after six bounded attempts; retained diagnostics' >&2
+  exit 1
+}
+test "$(cut -f 1 "$output/release-metadata.tsv")" = "$tag"
+test "$(cut -f 2 "$output/release-metadata.tsv")" = "$source"
+test "$(cut -f 3 "$output/release-metadata.tsv")" = true
+"$gh" api --paginate "repos/$repo/releases/$release_id/assets?per_page=100" --jq '.[] | [.id,.name] | @tsv' > "$output/assets-before.tsv"
+while IFS="$tab" read -r id name {
+  if (name !== apk_name and name !== receipt_name) { echo 'unexpected asset on qualification release' >&2; exit 1 }
+} < "$output/assets-before.tsv"
+var verification = $(mktemp -d "$output/verify.XXXXXX")
+for name in "$apk_name" "$receipt_name" {
+  var asset_id = $(awk -F '\t' -v name="$name" '$2 == name {print $1}' "$output/assets-before.tsv")
+  if (asset_id === '') {
+    # No --clobber: an upload race fails instead of replacing any bytes.
+    "$gh" release upload "$tag" "$output/assets/$name" --repo "$repo"
+  }
+  "$gh" api --paginate "repos/$repo/releases/$release_id/assets?per_page=100" --jq '.[] | [.id,.name] | @tsv' > "$output/assets-current.tsv"
+  setvar asset_id = $(awk -F '\t' -v name="$name" '$2 == name {print $1}' "$output/assets-current.tsv")
+  printf '%s\n' "$asset_id" | grep -Eq '^[0-9]+$'
+  "$gh" api -H 'Accept: application/octet-stream' "repos/$repo/releases/assets/$asset_id" > "$verification/$name"
+  cmp "$output/assets/$name" "$verification/$name"
+}
+var release_is_draft = $(cut -f 4 "$output/release-metadata.tsv")
+if (release_is_draft === 'true') {
+  "$gh" api --method PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true --jq .html_url > "$output/release-url.txt"
+}
+"$gh" api "repos/$repo/releases/$release_id" --jq '[.tag_name,.target_commitish,.prerelease,.draft,.html_url] | @tsv' > "$output/published-release.tsv"
+test "$(cut -f 1 "$output/published-release.tsv")" = "$tag"
+test "$(cut -f 2 "$output/published-release.tsv")" = "$source"
+test "$(cut -f 3 "$output/published-release.tsv")" = true
+test "$(cut -f 4 "$output/published-release.tsv")" = false
+"$gh" api "repos/$repo/git/ref/tags/$tag" --jq '[.object.type,.object.sha] | @tsv' > "$output/published-tag.tsv"
+test "$(cut -f 1 "$output/published-tag.tsv")" = commit
+test "$(cut -f 2 "$output/published-tag.tsv")" = "$source"
+"$gh" api --paginate "repos/$repo/releases/$release_id/assets?per_page=100" --jq '.[] | [.name,.size,.browser_download_url] | @tsv' > "$output/published-assets.tsv"
+test "$(wc -l < "$output/published-assets.tsv" | tr -d '[:space:]')" -eq 2
+while IFS="$tab" read -r name size url {
+  if (name !== apk_name and name !== receipt_name) { echo 'unexpected published qualification asset' >&2; exit 1 }
+  test "$url" = "https://github.com/$repo/releases/download/$tag/$name"
+  test "$size" -eq "$(wc -c < "$output/assets/$name" | tr -d '[:space:]')"
+  # Cat Food's existing deferred file route uses this unauthenticated raw URL.
+  # Verify that route returns the exact bytes rather than an Actions ZIP/login.
+  curl -fL --retry 2 "$url" > "$verification/public-$name"
+  cmp "$output/assets/$name" "$verification/public-$name"
+} < "$output/published-assets.tsv"
+printf 'schema\tholomorphic-qualification-publication-v1\napplication_commit\t%s\napk_sha256\t%s\napk_bytes\t%s\nrelease\t%s\nphysical_gpu\tNOT_RUN\nsustained_performance\tNOT_RUN\n' \
+  "$source" "$apk_digest" "$apk_bytes" "$(cut -f 5 "$output/published-release.tsv")" > "$output/publication.tsv"
+cat "$output/published-assets.tsv" >> "$output/publication.tsv"
+test "$(sha256sum "$apk" | cut -d ' ' -f 1)" = "$apk_digest"
+cat "$output/publication.tsv"

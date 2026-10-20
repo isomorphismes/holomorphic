@@ -14,17 +14,24 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: holomorphic-apk-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  generated-fragment:
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@08b014a891d66ecbe412d4dad383352d8791e5ec
+    with:
+      control-head: 08b014a891d66ecbe412d4dad383352d8791e5ec
+      application-head: ${{ github.event.pull_request.head.sha || github.sha }}
+
   compilers:
     uses: ./.github/workflows/ick-compilers.yml
 
   build:
-    needs: compilers
+    needs: [compilers, generated-fragment]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -40,7 +47,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: isomorphisms/ai-ci
-          ref: 903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+          ref: 66eba2c0e02276386ed9d736614348fd3416d48a
           path: _/ai-ci-ick
 
       - name: Download qualified compiler stages
@@ -96,9 +103,21 @@ jobs:
         run: |
           make -f _/ick/Makefile test ICK="${{ steps.ick.outputs.compiler }}"
 
+      - name: Consume FP / Kitchen / Ike checked Idriç fragment
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-fragment
+          path: _/shader/generated
+
       - name: Build holomorphic-random APK
         working-directory: android
+        env:
+          HOLOMORPHIC_GENERATED_FRAGMENT: ${{ github.workspace }}/_/shader/generated/continuation.frag
         run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Reject packaged shader/provenance drift
+        run: |
+          python3 _/shader/verify-packaged-fragment.py android/app/build/outputs/apk/debug/app-debug.apk _/shader/generated/continuation.frag _/shader/generated/continuation.provenance
 
       - name: Verify declared source producers
         uses: isomorphisms/ai-ci@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8

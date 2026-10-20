@@ -60,7 +60,8 @@ def canonical_wegert_color(value: complex) -> tuple[float, float, float]:
     tau = 6.28318530717958647692
     log_10 = 2.30258509299404568402
     phase = math.atan2(value.imag, value.real)
-    log_modulus = math.log(max(abs(value), 1.0e-12))
+    # A one-ulp norm error can cross a discontinuous log-decade colour band.
+    log_modulus = math.log(max(math.hypot(value.real, value.imag), 1.0e-12))
     hue_degrees = 360.0 * positive_fract(phase / tau)
     log_modulus_band = positive_fract(log_modulus / log_10)
     lightness = (

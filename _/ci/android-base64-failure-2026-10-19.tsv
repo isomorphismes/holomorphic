@@ -1,0 +1,30 @@
+field	value
+schema	holomorphic-android-assembler-failure-v1
+application_head	9d5a7c05edb3fd0f274c5fe78e68805644ebc734
+workflow_run	https://github.com/isomorphismes/holomorphic/actions/runs/39295773851
+arm64_job	https://github.com/isomorphismes/holomorphic/actions/runs/39295773851/job/118207777602
+arm64_status	FAIL
+arm64_boundary	NDK r29 assembly of ICK-generated literal-glyph qualification source
+old_shared_provider	isomorphisms/ai-ci/ick-android@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+old_ick_source	c61e448251744a2f40ad743ebef1a027bdcd2f9d
+gcc_source	6294f1d9e7536e5ffcde09d1528c918d63abfef5
+ndk	29.0.14206865
+observed_configure	2026-10-19T17:55:28Z checking assembler for .base64... yes
+observed_failure	2026-10-19T18:10:15Z glyphs-O0.s:92:2: error: unknown directive .base64 "w7cA"
+armv7_job	https://github.com/isomorphismes/holomorphic/actions/runs/39295773851/job/118207777287
+armv7_status	PASS on that historical head and provider only
+x86_64_job	https://github.com/isomorphismes/holomorphic/actions/runs/39295773851/job/118207777892
+x86_64_status	FAIL
+x86_64_boundary	NDK r29 assembly of ICK-generated literal-glyph qualification source
+x86_64_observed_failure	2026-10-19T18:13:55Z glyphs-O0.s:92:2: error: unknown directive .base64 "w7cA"
+corrective_provider	isomorphisms/ai-ci/ick-android@66eba2c0e02276386ed9d736614348fd3416d48a
+retained_fix	f6d825d15cd3c0c34ae1b43240a463ff5d343090
+corrective_ick_source	fbe86e23d55cfec2000c08e61deea2a407fd7175
+correction	Force gcc_cv_as_base64=no across both configure stages; reject enabled auto-host.h; cache recipe v2
+missing_option	The exact GCC common.opt has no asm-base64 option; do not invent -fno-asm-base64
+option_source	https://github.com/gcc-mirror/gcc/blob/6294f1d9e7536e5ffcde09d1528c918d63abfef5/gcc/common.opt
+capability_source	https://github.com/gcc-mirror/gcc/blob/6294f1d9e7536e5ffcde09d1528c918d63abfef5/gcc/config/elfos.h
+configure_source	https://github.com/gcc-mirror/gcc/blob/6294f1d9e7536e5ffcde09d1528c918d63abfef5/gcc/configure.ac
+new_head_compiler_qualification	NOT_RUN at this source update
+new_head_apk	NOT_RUN at this source update
+physical_gpu	NOT_RUN

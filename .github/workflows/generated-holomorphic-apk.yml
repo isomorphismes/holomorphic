@@ -1,0 +1,394 @@
+name: Checked Idris Holomorphic GLES APK
+
+on:
+  pull_request:
+    paths:
+      - 'gpu/**'
+      - 'android/**'
+      - '_/shader/**'
+      - '_/oracle/**'
+      - '_/tests/**'
+      - '_/ci/**'
+      - 'tests/**'
+      - '.github/workflows/generated-holomorphic-apk.yml'
+      - '.github/workflows/ick-compilers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: checked-holomorphic-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  compilers:
+    needs: generated-fragment
+    uses: ./.github/workflows/ick-compilers.yml
+
+  generated-fragment:
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@08b014a891d66ecbe412d4dad383352d8791e5ec
+    with:
+      control-head: 08b014a891d66ecbe412d4dad383352d8791e5ec
+      application-head: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  generated-apk:
+    needs: [compilers, generated-fragment]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Check out exact Holomorphic head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Download the actual FP Kitchen Ike generated fragment
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-fragment
+          path: _/shader/generated
+
+      - name: Acquire verified Grease for the packaging checks
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p _/runtime
+          gh api repos/dilapidated-shed/grease/actions/artifacts/12192502970/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
+          printf '%s  %s\n' 295329ec3bb419d90364fcb5937eafe4306b03f68b7aaa63089dadde8082ffb5 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
+          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
+          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
+          chmod 755 _/runtime/ysh
+
+      - name: Qualify native ICK compiler
+        id: ick
+        uses: isomorphisms/ai-ci/ick-host@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+
+      - name: Check out pinned ICK stage interface
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: isomorphisms/ai-ci
+          ref: 66eba2c0e02276386ed9d736614348fd3416d48a
+          path: _/ai-ci-ick
+          persist-credentials: false
+
+      - name: Download qualified native stages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ick-*
+          path: _/build/ick-packages
+          merge-multiple: true
+
+      - name: Restore qualified native stages
+        run: |
+          set -euo pipefail
+          for abi in armeabi-v7a arm64-v8a x86_64; do
+            make -f _/ai-ci-ick/ick-android/Makefile restore-stage \
+              ABI="$abi" ICK_STAGE="$GITHUB_WORKSPACE/_/build/ick/$abi" \
+              ICK_ARCHIVE="$GITHUB_WORKSPACE/_/build/ick-packages/ick-$abi.tar.gz"
+          done
+
+      - name: Install Android packaging toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: ''
+
+      - name: Install Android NDK and platform
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.22.1"
+
+      - name: Prove default and negative shader-selection gates
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture="$RUNNER_TEMP/holomorphic-shader-mode-negative.log"
+          if env -u HOLOMORPHIC_SHADER_MODE -u HOLOMORPHIC_GENERATED_FRAGMENT \
+              ./gradlew --no-daemon :app:tasks > "$capture" 2>&1; then
+            echo "Missing generated input was accepted by default" >&2
+            exit 1
+          fi
+          grep -Fq "Default checked-idris mode requires HOLOMORPHIC_GENERATED_FRAGMENT" "$capture"
+
+          if env HOLOMORPHIC_SHADER_MODE=unrecognized HOLOMORPHIC_GENERATED_FRAGMENT=anything \
+              ./gradlew --no-daemon :app:tasks > "$capture" 2>&1; then
+            echo "Unknown shader mode was accepted" >&2
+            exit 1
+          fi
+          grep -Fq "Unsupported HOLOMORPHIC_SHADER_MODE" "$capture"
+
+          if env HOLOMORPHIC_SHADER_MODE=legacy-reference HOLOMORPHIC_GENERATED_FRAGMENT=anything \
+              ./gradlew --no-daemon :app:tasks > "$capture" 2>&1; then
+            echo "Conflicting legacy/generated selection was accepted" >&2
+            exit 1
+          fi
+          grep -Fq "Legacy reference mode must not consume checked fragment material" "$capture"
+
+          env -u HOLOMORPHIC_GENERATED_FRAGMENT HOLOMORPHIC_SHADER_MODE=legacy-reference \
+              ./gradlew --no-daemon :app:assembleContinuationShader
+          grep -Fq 'HOLOMORPHIC_REQUIRE_GENERATED_SHADER 0' \
+              ../_/build/shader-binding/holomorphic_shader_binding.h
+          test ! -e app/build/generated/wegert-assets/continuation.provenance
+          grep -Fq '/*__WEGERT_COLOR_CORE__*/' app/src/main/assets/continuation.frag.in
+          echo "SHADER_SELECTION_NEGATIVE_GATES_PASS: reference explicitly selected, default fail-closed"
+
+      - name: Reject source/receipt digest mutation before APK build
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/holomorphic-corrupted-shader"
+          mkdir -p "$scratch"
+          cp ../_/shader/generated/continuation.frag "$scratch/continuation.frag"
+          sed 's/^fragment_sha256=.*/fragment_sha256=0000000000000000000000000000000000000000000000000000000000000000/' \
+              ../_/shader/generated/continuation.provenance > "$scratch/continuation.provenance"
+          capture="$RUNNER_TEMP/holomorphic-corrupted-shader.log"
+          if HOLOMORPHIC_GENERATED_FRAGMENT="$scratch/continuation.frag" \
+              ./gradlew --no-daemon :app:assembleContinuationShader > "$capture" 2>&1; then
+            echo "Corrupted generated provenance was accepted" >&2
+            exit 1
+          fi
+          grep -Fq "Compiled fragment bytes differ from the generation receipt" "$capture"
+          echo "SHADER_PROVENANCE_MUTATION_REJECTED"
+
+      - name: Build signed APK selecting generated shader only
+        working-directory: android
+        env:
+          HOLOMORPHIC_GENERATED_FRAGMENT: ${{ github.workspace }}/_/shader/generated/continuation.frag
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Compare generated shader to packaged runtime asset
+        run: |
+          set -euo pipefail
+          apk="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$apk"
+          unzip -p "$apk" assets/continuation.frag > "_/shader/packaged.frag"
+          unzip -p "$apk" assets/continuation.provenance > "_/shader/packaged.provenance"
+          cmp "_/shader/generated/continuation.frag" "_/shader/packaged.frag"
+          cmp "_/shader/generated/continuation.provenance" "_/shader/packaged.provenance"
+          sha256sum "$apk" "_/shader/packaged.frag" > "_/shader/generated/artifact-digests.sha256"
+          ! grep -Fq '/*__WEGERT_COLOR_CORE__*/' "_/shader/packaged.frag"
+
+      - name: Check native producer/toolchain contract
+        env:
+          HOLOMORPHIC_ICK_HOST: ${{ steps.ick.outputs.compiler }}
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/check-native-toolchain.grease "$GITHUB_WORKSPACE" "$HOLOMORPHIC_ICK_HOST" "$GITHUB_WORKSPACE/_/ai-ci-ick"
+
+      - name: Verify stable APK signer
+        uses: isomorphisms/ai-ci/android-signing@b3af13b3ab2bac9dd7c72bf9dd855ed5a17609b5
+        with:
+          apk: android/app/build/outputs/apk/debug/app-debug.apk
+          lane: test
+
+      - name: Check qualification publication rejection gates
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/test-qualification-publication.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/_/runtime/ysh"
+
+      - name: Inspect the unchanged signed qualification APK
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/prepare-qualification-apk.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-apk"
+
+      - name: Upload APK and compiler provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: checked-idris-holomorphic-apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            _/shader/generated/continuation.frag
+            _/shader/generated/continuation.provenance
+            _/shader/generated/artifact-digests.sha256
+            _/build/qualification-apk/producer-identity.tsv
+            _/build/qualification-apk/manifest-badging.txt
+            _/build/qualification-apk/signature-verification.txt
+            _/build/qualification-apk/native-entries.txt
+            _/build/qualification-apk/native/**/*.sections
+            _/build/qualification-apk/native/**/*.header
+          if-no-files-found: error
+
+  emulate:
+    needs: generated-apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      HOLOMORPHIC_GREASE: ${{ github.workspace }}/_/runtime/ysh
+    steps:
+      - name: Check out the exact maintained emulator procedure
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      # The emulator action fixes its outer script to /usr/bin/sh. Acquire the
+      # pinned Grease artifact at this narrow bootstrap boundary; the action
+      # delegates all actual launch/selection checks to maintained Grease code.
+      - name: Acquire and verify native Grease for emulator execution
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p _/runtime
+          gh api repos/dilapidated-shed/grease/actions/artifacts/12192502970/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
+          printf '%s  %s\n' 295329ec3bb419d90364fcb5937eafe4306b03f68b7aaa63089dadde8082ffb5 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
+          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
+          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
+          chmod 755 _/runtime/ysh
+
+      - name: Download exact generated APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-apk
+          path: artifacts
+
+      - name: Check out independent predeclared GPU acceptance
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: isomorphisms/ai-ci
+          ref: 13231c52e660ed186add95647f566b328eedbf9c
+          path: _/holo-aici
+          persist-credentials: false
+
+      - name: Check out exact Ithon interpreter
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: dilapidated-shed/ithon
+          ref: d6e83969f82512e920fb17b44326cb54f31d015c
+          path: _/ithon
+          persist-credentials: false
+
+      - name: Prepare Android emulator
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: ''
+
+      - name: Enable KVM device permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Exercise emitted fragment in the actual Holomorphic app
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          profile: medium_phone
+          ram-size: 2048M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -no-metrics
+          script: |
+            env ASAN_OPTIONS=detect_leaks=0 "$HOLOMORPHIC_GREASE" "$GITHUB_WORKSPACE/_/shader/exercise-generated-emulator.grease" "$GITHUB_WORKSPACE/artifacts/android/app/build/outputs/apk/debug/app-debug.apk" "$GITHUB_WORKSPACE/artifacts/_/shader/generated/continuation.frag" "$GITHUB_WORKSPACE"
+
+      - name: Independently compare raw numerical and same-program colour output
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: _/runtime/ysh _/shader/audit-generated-emulator.grease "$GITHUB_WORKSPACE"
+
+      - name: Upload actual app runtime evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: checked-idris-holomorphic-emulator
+          path: |
+            generated-holomorphic-emulator.log
+            generated-holomorphic-independent-acceptance.log
+            generated-holomorphic-frame-a.png
+            generated-holomorphic-frame-b.png
+          if-no-files-found: warn
+
+  qualification-publication:
+    needs: [generated-apk, emulate]
+    if: >-
+      needs.emulate.result == 'success' && github.repository == 'isomorphismes/holomorphic' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      ASAN_OPTIONS: detect_leaks=0
+    steps:
+      - name: Check out the exact accepted application source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Acquire the verified Grease engine
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p _/runtime
+          gh api repos/dilapidated-shed/grease/actions/artifacts/12192502970/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
+          printf '%s  %s\n' 295329ec3bb419d90364fcb5937eafe4306b03f68b7aaa63089dadde8082ffb5 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
+          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
+          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
+          chmod 755 _/runtime/ysh
+
+      - name: Download the exact signed APK and producer identity
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-apk
+          path: artifacts/apk
+
+      - name: Download the actual independently accepted emulator evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-emulator
+          path: artifacts/emulator
+
+      - name: Publish the unchanged qualification APK after independent acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOLOMORPHIC_EMULATOR_ACCEPTED: ${{ needs.emulate.result }}
+        run: _/runtime/ysh _/shader/publish-qualification-apk.grease "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/artifacts/emulator" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-publication"
+
+      - name: Check out the unchanged pinned Cat Food installer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: isomorphisms/catfood
+          ref: b387f90d3973aae39ba19d370a830da627299ab1
+          path: _/catfood-qualification
+          persist-credentials: false
+
+      - name: Acquire the exact public APK through isolated deferred Cat Food file mode
+        run: _/runtime/ysh _/shader/acquire-qualification-apk.grease "$GITHUB_WORKSPACE/_/catfood-qualification" "$GITHUB_WORKSPACE/_/build/qualification-publication" "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/_/build/qualification-catfood-acquisition"
+
+      - name: Preserve qualification publication identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: checked-idris-holomorphic-publication
+          path: |
+            _/build/qualification-publication/*.tsv
+            _/build/qualification-publication/release-created-id.txt
+            _/build/qualification-publication/release-create.stderr
+            _/build/qualification-publication/release-metadata-*.stderr
+            _/build/qualification-publication/assets/*.tsv
+            _/build/qualification-publication/gh-version.txt
+            _/build/qualification-catfood-acquisition/acquisition.tsv
+            _/build/qualification-catfood-acquisition/catfood-receipt.tsv
+            _/build/qualification-catfood-acquisition/published-qualification.tsv
+            _/build/qualification-catfood-acquisition/manifest/**
+            _/build/qualification-catfood-acquisition/*.log
+          if-no-files-found: error
