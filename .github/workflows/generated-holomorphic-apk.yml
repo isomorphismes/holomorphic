@@ -104,6 +104,60 @@ jobs:
       - name: Install Android NDK and platform
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.22.1"
 
+      - name: Prove default and negative shader-selection gates
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture="$RUNNER_TEMP/holomorphic-shader-mode-negative.log"
+          if env -u HOLOMORPHIC_SHADER_MODE -u HOLOMORPHIC_GENERATED_FRAGMENT \
+              ./gradlew --no-daemon :app:tasks > "$capture" 2>&1; then
+            echo "Missing generated input was accepted by default" >&2
+            exit 1
+          fi
+          grep -Fq "Default checked-idris mode requires HOLOMORPHIC_GENERATED_FRAGMENT" "$capture"
+
+          if env HOLOMORPHIC_SHADER_MODE=unrecognized HOLOMORPHIC_GENERATED_FRAGMENT=anything \
+              ./gradlew --no-daemon :app:tasks > "$capture" 2>&1; then
+            echo "Unknown shader mode was accepted" >&2
+            exit 1
+          fi
+          grep -Fq "Unsupported HOLOMORPHIC_SHADER_MODE" "$capture"
+
+          if env HOLOMORPHIC_SHADER_MODE=legacy-reference HOLOMORPHIC_GENERATED_FRAGMENT=anything \
+              ./gradlew --no-daemon :app:tasks > "$capture" 2>&1; then
+            echo "Conflicting legacy/generated selection was accepted" >&2
+            exit 1
+          fi
+          grep -Fq "Legacy reference mode must not consume checked fragment material" "$capture"
+
+          env -u HOLOMORPHIC_GENERATED_FRAGMENT HOLOMORPHIC_SHADER_MODE=legacy-reference \
+              ./gradlew --no-daemon :app:assembleContinuationShader
+          grep -Fq 'HOLOMORPHIC_REQUIRE_GENERATED_SHADER 0' \
+              ../_/build/shader-binding/holomorphic_shader_binding.h
+          test ! -e app/build/generated/wegert-assets/continuation.provenance
+          grep -Fq '/*__WEGERT_COLOR_CORE__*/' app/src/main/assets/continuation.frag.in
+          echo "SHADER_SELECTION_NEGATIVE_GATES_PASS: reference explicitly selected, default fail-closed"
+
+      - name: Reject source/receipt digest mutation before APK build
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/holomorphic-corrupted-shader"
+          mkdir -p "$scratch"
+          cp ../_/shader/generated/continuation.frag "$scratch/continuation.frag"
+          sed 's/^fragment_sha256=.*/fragment_sha256=0000000000000000000000000000000000000000000000000000000000000000/' \
+              ../_/shader/generated/continuation.provenance > "$scratch/continuation.provenance"
+          capture="$RUNNER_TEMP/holomorphic-corrupted-shader.log"
+          if HOLOMORPHIC_GENERATED_FRAGMENT="$scratch/continuation.frag" \
+              ./gradlew --no-daemon :app:assembleContinuationShader > "$capture" 2>&1; then
+            echo "Corrupted generated provenance was accepted" >&2
+            exit 1
+          fi
+          grep -Fq "Compiled fragment bytes differ from the generation receipt" "$capture"
+          echo "SHADER_PROVENANCE_MUTATION_REJECTED"
+
       - name: Build signed APK selecting generated shader only
         working-directory: android
         env:
