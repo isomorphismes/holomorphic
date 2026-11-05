@@ -46,9 +46,9 @@ concurrency:
 
 jobs:
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@08b014a891d66ecbe412d4dad383352d8791e5ec
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@9531b31de8a3f5dd41f8083dd2ecdd1293e31628
     with:
-      control-head: 08b014a891d66ecbe412d4dad383352d8791e5ec
+      control-head: 9531b31de8a3f5dd41f8083dd2ecdd1293e31628
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   compilers:
@@ -122,6 +122,9 @@ jobs:
             -keysize 2048 \
             -validity 2 \
             -dname 'CN=CI Validation'
+
+      - name: Stage fixed shared charcoal presentation
+        uses: ./_/ci/charcoal
 
       - name: Build native APK and signed Play bundle
         working-directory: android
@@ -287,6 +290,9 @@ jobs:
           set -euo pipefail
           test -n "$UPLOAD_KEYSTORE_BASE64"
           printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 --decode > /tmp/play-upload.p12
+
+      - name: Stage fixed shared charcoal presentation
+        uses: ./_/ci/charcoal
 
       - name: Build signed native explorer bundle
         working-directory: android

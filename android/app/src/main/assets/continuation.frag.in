@@ -192,8 +192,8 @@ void main() {
     bool pole_selected = u_placement_kind == 1;
 
     float zero_disk = circle_mask(gl_FragCoord.xy, zero_center, placement_radius);
-    color = mix(color, zero_selected ? vec3(0.94) : vec3(0.04), zero_disk * 0.86);
-    vec3 zero_mark_color = zero_selected ? vec3(0.05) : vec3(0.96);
+    color = mix(color, zero_selected ? vec3(56.0 / 255.0) : vec3(47.0 / 255.0), zero_disk);
+    vec3 zero_mark_color = zero_selected ? vec3(244.0 / 255.0) : vec3(180.0 / 255.0);
     float zero_mark = ring_mask(
         gl_FragCoord.xy,
         zero_center,
@@ -203,8 +203,8 @@ void main() {
     color = mix(color, zero_mark_color, zero_mark);
 
     float pole_disk = circle_mask(gl_FragCoord.xy, pole_center, placement_radius);
-    color = mix(color, pole_selected ? vec3(0.94) : vec3(0.04), pole_disk * 0.86);
-    vec3 pole_mark_color = pole_selected ? vec3(0.05) : vec3(0.96);
+    color = mix(color, pole_selected ? vec3(56.0 / 255.0) : vec3(47.0 / 255.0), pole_disk);
+    vec3 pole_mark_color = pole_selected ? vec3(244.0 / 255.0) : vec3(180.0 / 255.0);
     float pole_mark = max(
         line_mask(
             gl_FragCoord.xy,

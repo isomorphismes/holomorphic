@@ -248,19 +248,19 @@ draw_placement_controls pixel resolution kind color =
       zero_selected = int_to_double kind == 0.0
       pole_selected = int_to_double kind == 1.0
       zero_disk = circle_mask pixel zero_center radius
-      zero_background = if zero_selected then vec3 0.94 0.94 0.94
-                                         else vec3 0.04 0.04 0.04
-      zero_mark_color = if zero_selected then vec3 0.05 0.05 0.05
-                                         else vec3 0.96 0.96 0.96
-      after_zero_disk = mix_rgb color zero_background (zero_disk * 0.86)
+      zero_background = if zero_selected then vec3 (56.0 / 255.0) (56.0 / 255.0) (56.0 / 255.0)
+                                         else vec3 (47.0 / 255.0) (47.0 / 255.0) (47.0 / 255.0)
+      zero_mark_color = if zero_selected then vec3 (244.0 / 255.0) (244.0 / 255.0) (244.0 / 255.0)
+                                         else vec3 (180.0 / 255.0) (180.0 / 255.0) (180.0 / 255.0)
+      after_zero_disk = mix_rgb color zero_background zero_disk
       zero_ring = ring_mask pixel zero_center (radius * 0.40) (radius * 0.25)
       after_zero_mark = mix_rgb after_zero_disk zero_mark_color zero_ring
       pole_disk = circle_mask pixel pole_center radius
-      pole_background = if pole_selected then vec3 0.94 0.94 0.94
-                                         else vec3 0.04 0.04 0.04
-      pole_mark_color = if pole_selected then vec3 0.05 0.05 0.05
-                                         else vec3 0.96 0.96 0.96
-      after_pole_disk = mix_rgb after_zero_mark pole_background (pole_disk * 0.86)
+      pole_background = if pole_selected then vec3 (56.0 / 255.0) (56.0 / 255.0) (56.0 / 255.0)
+                                         else vec3 (47.0 / 255.0) (47.0 / 255.0) (47.0 / 255.0)
+      pole_mark_color = if pole_selected then vec3 (244.0 / 255.0) (244.0 / 255.0) (244.0 / 255.0)
+                                         else vec3 (180.0 / 255.0) (180.0 / 255.0) (180.0 / 255.0)
+      after_pole_disk = mix_rgb after_zero_mark pole_background pole_disk
       pole_a = line_mask pixel
                  (add_components pole_center (vec2 (-9.0) (-9.0)))
                  (add_components pole_center (vec2 9.0 9.0)) 2.2

@@ -1,0 +1,13 @@
+name: Fixed charcoal presentation
+description: Stage the pinned shared launch, splash and control resources.
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      with:
+        repository: isomorphisms/android-NDK
+        ref: 3e682fb1175beef5625dbd2418730220e49fc9bd
+        path: _/charcoal-presentation
+        persist-credentials: false
+    - shell: sh
+      run: cp -R _/charcoal-presentation/native/presentation/res/. android/app/src/main/res/

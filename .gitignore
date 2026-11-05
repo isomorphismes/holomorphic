@@ -5,3 +5,8 @@ build/
 dist/
 *.egg-info/
 media/
+_/charcoal-presentation/
+android/app/src/main/res/values/charcoal.xml
+android/app/src/main/res/values-v21/charcoal.xml
+android/app/src/main/res/values-v31/charcoal.xml
+android/app/src/main/res/color/charcoal_text_states.xml
