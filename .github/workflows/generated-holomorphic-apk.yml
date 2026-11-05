@@ -237,7 +237,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: isomorphisms/ai-ci
-          ref: f3caae861efe7a1ba5d0cc7be2a1cf9bbdb4ded8
+          ref: 336214f6ac0e9f4acfb332fa8d60130ca8f5b885
           path: _/holo-aici
           persist-credentials: false
 

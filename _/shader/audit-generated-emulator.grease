@@ -7,7 +7,7 @@ case "$root" in /*) ;; *) exit 2 ;; esac
 test "$root" = "$(realpath -- "$root")"
 var aici = "$root/_/holo-aici"
 var ithon = "$root/_/ithon"
-test "$(git -C "$aici" rev-parse HEAD)" = f3caae861efe7a1ba5d0cc7be2a1cf9bbdb4ded8
+test "$(git -C "$aici" rev-parse HEAD)" = 336214f6ac0e9f4acfb332fa8d60130ca8f5b885
 test "$(git -C "$ithon" rev-parse HEAD)" = d6e83969f82512e920fb17b44326cb54f31d015c
 git -C "$aici" diff HEAD --exit-code --quiet
 git -C "$ithon" diff HEAD --exit-code --quiet
