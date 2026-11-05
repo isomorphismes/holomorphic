@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - feature/checked-idris-default
     paths:
       - '_/**'
       - '.github/workflows/ick-compilers.yml'
@@ -22,9 +23,9 @@ concurrency:
 
 jobs:
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@08b014a891d66ecbe412d4dad383352d8791e5ec
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@9531b31de8a3f5dd41f8083dd2ecdd1293e31628
     with:
-      control-head: 08b014a891d66ecbe412d4dad383352d8791e5ec
+      control-head: 9531b31de8a3f5dd41f8083dd2ecdd1293e31628
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   compilers:
@@ -109,6 +110,9 @@ jobs:
           name: checked-idris-holomorphic-fragment
           path: _/shader/generated
 
+      - name: Stage fixed shared charcoal presentation
+        uses: ./_/ci/charcoal
+
       - name: Build holomorphic-random APK
         working-directory: android
         env:
@@ -143,6 +147,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Restore qualified canonical Grease
+        uses: ./_/ci/grease
+
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
@@ -178,10 +190,7 @@ jobs:
             adb install -r artifacts/app-debug.apk
             adb install -r artifacts/app-debug.apk
             adb shell settings put secure immersive_mode_confirmations confirmed
-            adb logcat -c
-            adb shell am start -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
-            sleep 4
-            adb logcat -d > holomorphic-emulator.log
+            env ASAN_OPTIONS=detect_leaks=0 timeout 80s "$GITHUB_WORKSPACE/grease/bin/grease" "$GITHUB_WORKSPACE/_/ci/charcoal/wait-first-frame.grease" "holomorphic-emulator.log" "holomorphic-emulator.png"
             grep -Fq 'holomorphic field started with 3 workers' holomorphic-emulator.log
             grep -Fq 'holomorphic field ready:' holomorphic-emulator.log
             grep -Fq 'zeros=1 poles=1' holomorphic-emulator.log
@@ -211,6 +220,7 @@ jobs:
           name: analytic-continuation-holomorphic-emulator-evidence
           path: |
             holomorphic-emulator.log
+            holomorphic-emulator.log.startup-stream
             holomorphic-emulator.png
             holomorphic-motion-a.png
             holomorphic-motion-b.png

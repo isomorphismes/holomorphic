@@ -21,9 +21,9 @@ permissions:
 
 jobs:
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@08b014a891d66ecbe412d4dad383352d8791e5ec
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@9531b31de8a3f5dd41f8083dd2ecdd1293e31628
     with:
-      control-head: 08b014a891d66ecbe412d4dad383352d8791e5ec
+      control-head: 9531b31de8a3f5dd41f8083dd2ecdd1293e31628
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   compilers:
@@ -79,6 +79,9 @@ jobs:
         with:
           name: checked-idris-holomorphic-fragment
           path: _/shader/generated
+
+      - name: Stage fixed shared charcoal presentation
+        uses: ./_/ci/charcoal
 
       - name: Build unsigned release APK
         working-directory: android

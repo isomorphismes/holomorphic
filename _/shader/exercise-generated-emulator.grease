@@ -15,6 +15,15 @@ var log = "$output/generated-holomorphic-emulator.log"
 adb install -r "$apk"
 adb install -r "$apk"
 adb logcat -c
+# Capture before launch, retaining the unfiltered stream as evidence. Repeated
+# dumps retained after a burst of factor/readback records lacked required rows.
+# The checker still requires every observation from this actual process.
+var stream = "$output/generated-holomorphic-logcat-stream.txt"
+fork {
+  try { timeout --signal=INT 50s adb logcat -v threadtime -b all > "$stream" }
+  if (_error.code !== 0 and _error.code !== 124) { exit 1 }
+}
+sleep 1
 adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
 var process = $(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r')
 printf '%s\n' "$process" | grep -Eq '^[0-9]+$'
@@ -22,7 +31,7 @@ var attempts = 0
 var ready = false
 while (attempts < 35) {
   printf 'HOLO_PROCESS package=org.isomorphisms.analyticcontinuation.lasso.dev pid=%s\n' "$process" > "$log"
-  adb logcat -d --pid="$process" >> "$log"
+  awk -v process="$process" '$3 == process' "$stream" >> "$log"
   if grep -Fq 'holomorphic field first frame:' "$log" {
     setvar ready = true
     break
@@ -31,6 +40,9 @@ while (attempts < 35) {
   setvar attempts += 1
 }
 test "$[ready]" = true
+wait
+printf 'HOLO_PROCESS package=org.isomorphisms.analyticcontinuation.lasso.dev pid=%s\n' "$process" > "$log"
+awk -v process="$process" '$3 == process' "$stream" >> "$log"
 grep -Fq 'holomorphic field renderer ready:' "$log"
 grep -Fq 'holomorphic field GLSL backend selected: compiler=idris2-glsles fallback=none' "$log"
 grep -Fq 'holomorphic field shader bytes verified: mode=checked-idris compiler=idris2-glsles' "$log"

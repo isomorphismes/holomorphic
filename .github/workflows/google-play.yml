@@ -46,9 +46,9 @@ concurrency:
 
 jobs:
   generated-fragment:
-    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@08b014a891d66ecbe412d4dad383352d8791e5ec
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@9531b31de8a3f5dd41f8083dd2ecdd1293e31628
     with:
-      control-head: 08b014a891d66ecbe412d4dad383352d8791e5ec
+      control-head: 9531b31de8a3f5dd41f8083dd2ecdd1293e31628
       application-head: ${{ github.event.pull_request.head.sha || github.sha }}
 
   compilers:
@@ -123,6 +123,9 @@ jobs:
             -validity 2 \
             -dname 'CN=CI Validation'
 
+      - name: Stage fixed shared charcoal presentation
+        uses: ./_/ci/charcoal
+
       - name: Build native APK and signed Play bundle
         working-directory: android
         env:
@@ -175,6 +178,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Restore qualified canonical Grease
+        uses: ./_/ci/grease
+
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
@@ -203,10 +214,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -no-metrics
           script: |
             adb install -r artifacts/app-debug.apk
-            adb logcat -c
-            adb shell am start -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
-            sleep 4
-            adb logcat -d > analytic-continuation-emulator.log
+            env ASAN_OPTIONS=detect_leaks=0 timeout 80s "$GITHUB_WORKSPACE/grease/bin/grease" "$GITHUB_WORKSPACE/_/ci/charcoal/wait-first-frame.grease" "analytic-continuation-emulator.log" "analytic-continuation-emulator.png"
             adb exec-out screencap -p > analytic-continuation-emulator.png
             adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r' | grep -Eq '^[0-9]+$'
             grep -Fq 'holomorphic field started with 3 workers' analytic-continuation-emulator.log
@@ -228,6 +236,7 @@ jobs:
           name: analytic-continuation-emulator-evidence
           path: |
             analytic-continuation-emulator.log
+            analytic-continuation-emulator.log.startup-stream
             analytic-continuation-emulator.png
           if-no-files-found: warn
 
@@ -287,6 +296,9 @@ jobs:
           set -euo pipefail
           test -n "$UPLOAD_KEYSTORE_BASE64"
           printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 --decode > /tmp/play-upload.p12
+
+      - name: Stage fixed shared charcoal presentation
+        uses: ./_/ci/charcoal
 
       - name: Build signed native explorer bundle
         working-directory: android

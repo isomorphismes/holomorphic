@@ -1,0 +1,47 @@
+#!/usr/bin/env grease
+# Observe the actual application's first frame before the existing UI checks.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 2
+var log = ARGV[0]
+var screenshot = ARGV[1]
+var package = 'org.isomorphisms.analyticcontinuation.lasso.dev'
+var activity = 'org.isomorphisms.analyticcontinuation.ExplorerActivity'
+var stream = "$log.startup-stream"
+timeout 5s adb shell am force-stop "$package"
+timeout 5s adb logcat -c
+# Start before am start: large numerical readbacks can evict startup records.
+fork {
+  try { timeout --signal=INT 50s adb logcat -v threadtime -b all > "$stream" }
+  if (_error.code !== 0 and _error.code !== 124) { exit 1 }
+}
+sleep 1
+timeout 20s adb shell am start -S -W -n "$package/$activity"
+var process = $(timeout 5s adb shell pidof -s "$package" | tr -d '\r')
+printf '%s\n' "$process" | grep -Eq '^[0-9]+$'
+var attempts = 0
+var ready = false
+while (attempts < 35) {
+  printf 'HOLO_PROCESS package=%s pid=%s\n' "$package" "$process" > "$log"
+  awk -v process="$process" '$3 == process' "$stream" >> "$log"
+  if grep -Fq 'holomorphic field first frame:' "$log" {
+    setvar ready = true
+    break
+  }
+  sleep 1
+  setvar attempts += 1
+}
+# Preserve the complete bounded stream, including failure evidence.
+wait
+printf 'HOLO_PROCESS package=%s pid=%s\n' "$package" "$process" > "$log"
+awk -v process="$process" '$3 == process' "$stream" >> "$log"
+timeout 8s adb exec-out screencap -p > "$screenshot"
+if (not ready) {
+  printf 'first_frame=FAIL reason=marker_timeout pid=%s attempts=%s\n' "$process" "$[attempts]" >&2
+  exit 1
+}
+test "$(timeout 5s adb shell pidof -s "$package" | tr -d '\r')" = "$process"
+grep -Fq 'holomorphic field started with 3 workers' "$log"
+grep -Fq 'holomorphic field ready:' "$log"
+grep -Fq 'zeros=1 poles=1' "$log"
+grep -Fq 'holomorphic field first frame:' "$log"
+printf 'first_frame=PASS pid=%s attempts=%s\n' "$process" "$[attempts]"
