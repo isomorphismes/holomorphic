@@ -192,6 +192,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Restore qualified canonical Grease
+        uses: ./_/ci/grease
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: analytic-continuation-${{ env.RELEASE_VERSION }}-apk
@@ -222,11 +230,7 @@ jobs:
           script: |
             adb install -r "artifacts/analytic-continuation-${RELEASE_VERSION}.apk"
             adb install -r "artifacts/analytic-continuation-${RELEASE_VERSION}.apk"
-            adb logcat -c
-            adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
-            timeout 20 bash -c 'until adb logcat -d | grep -Fq "holomorphic field ready:"; do sleep 1; done'
-            sleep 3
-            adb logcat -d > analytic-continuation-emulator.log
+            env ASAN_OPTIONS=detect_leaks=0 timeout 80s "$GITHUB_WORKSPACE/grease/bin/grease" "$GITHUB_WORKSPACE/_/ci/charcoal/wait-first-frame.grease" "analytic-continuation-emulator.log" "analytic-continuation-emulator.png"
             adb exec-out screencap -p > analytic-continuation-emulator.png
             adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r' | grep -Eq '^[0-9]+$'
             grep -Fq 'holomorphic field started with 3 workers' analytic-continuation-emulator.log
@@ -254,6 +258,7 @@ jobs:
           name: analytic-continuation-${{ env.RELEASE_VERSION }}-emulator-evidence
           path: |
             analytic-continuation-emulator.log
+            analytic-continuation-emulator.log.startup-stream
             analytic-continuation-emulator.png
             explorer-screen-stats.txt
           if-no-files-found: warn
