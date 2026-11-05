@@ -51,17 +51,7 @@ jobs:
           path: _/shader/generated
 
       - name: Acquire verified Grease for the packaging checks
-        shell: sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          mkdir -p _/runtime
-          gh api repos/dilapidated-shed/grease/actions/artifacts/13062637698/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
-          printf '%s  %s\n' fb500602a8ad878913e596f734c37769a5c7f3d2ac6941ee69ce22e31f479a19 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
-          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
-          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
-          chmod 755 _/runtime/ysh
+        uses: ./_/ci/grease
 
       - name: Qualify native ICK compiler
         id: ick
@@ -183,7 +173,7 @@ jobs:
         env:
           HOLOMORPHIC_ICK_HOST: ${{ steps.ick.outputs.compiler }}
           ASAN_OPTIONS: detect_leaks=0
-        run: _/runtime/ysh _/shader/check-native-toolchain.grease "$GITHUB_WORKSPACE" "$HOLOMORPHIC_ICK_HOST" "$GITHUB_WORKSPACE/_/ai-ci-ick"
+        run: grease/bin/grease _/shader/check-native-toolchain.grease "$GITHUB_WORKSPACE" "$HOLOMORPHIC_ICK_HOST" "$GITHUB_WORKSPACE/_/ai-ci-ick"
 
       - name: Verify stable APK signer
         uses: isomorphisms/ai-ci/android-signing@b3af13b3ab2bac9dd7c72bf9dd855ed5a17609b5
@@ -194,12 +184,12 @@ jobs:
       - name: Check qualification publication rejection gates
         env:
           ASAN_OPTIONS: detect_leaks=0
-        run: _/runtime/ysh _/shader/test-qualification-publication.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/_/runtime/ysh"
+        run: grease/bin/grease _/shader/test-qualification-publication.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/grease/bin/grease"
 
       - name: Inspect the unchanged signed qualification APK
         env:
           ASAN_OPTIONS: detect_leaks=0
-        run: _/runtime/ysh _/shader/prepare-qualification-apk.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-apk"
+        run: grease/bin/grease _/shader/prepare-qualification-apk.grease "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-apk"
 
       - name: Upload APK and compiler provenance
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -223,7 +213,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      HOLOMORPHIC_GREASE: ${{ github.workspace }}/_/runtime/ysh
+      HOLOMORPHIC_GREASE: ${{ github.workspace }}/grease/bin/grease
     steps:
       - name: Check out the exact maintained emulator procedure
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -235,17 +225,7 @@ jobs:
       # pinned Grease artifact at this narrow bootstrap boundary; the action
       # delegates all actual launch/selection checks to maintained Grease code.
       - name: Acquire and verify native Grease for emulator execution
-        shell: sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          mkdir -p _/runtime
-          gh api repos/dilapidated-shed/grease/actions/artifacts/13062637698/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
-          printf '%s  %s\n' fb500602a8ad878913e596f734c37769a5c7f3d2ac6941ee69ce22e31f479a19 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
-          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
-          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
-          chmod 755 _/runtime/ysh
+        uses: ./_/ci/grease
 
       - name: Download exact generated APK
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -257,7 +237,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: isomorphisms/ai-ci
-          ref: 13231c52e660ed186add95647f566b328eedbf9c
+          ref: f3caae861efe7a1ba5d0cc7be2a1cf9bbdb4ded8
           path: _/holo-aici
           persist-credentials: false
 
@@ -301,7 +281,7 @@ jobs:
       - name: Independently compare raw numerical and same-program colour output
         env:
           ASAN_OPTIONS: detect_leaks=0
-        run: _/runtime/ysh _/shader/audit-generated-emulator.grease "$GITHUB_WORKSPACE"
+        run: grease/bin/grease _/shader/audit-generated-emulator.grease "$GITHUB_WORKSPACE"
 
       - name: Upload actual app runtime evidence
         if: always()
@@ -335,17 +315,7 @@ jobs:
           persist-credentials: false
 
       - name: Acquire the verified Grease engine
-        shell: sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          mkdir -p _/runtime
-          gh api repos/dilapidated-shed/grease/actions/artifacts/13062637698/zip > "$RUNNER_TEMP/holomorphic-grease.zip"
-          printf '%s  %s\n' fb500602a8ad878913e596f734c37769a5c7f3d2ac6941ee69ce22e31f479a19 "$RUNNER_TEMP/holomorphic-grease.zip" | sha256sum -c -
-          unzip -p "$RUNNER_TEMP/holomorphic-grease.zip" _bin/cxx-asan/ysh > _/runtime/ysh
-          printf '%s  %s\n' 7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c _/runtime/ysh | sha256sum -c -
-          chmod 755 _/runtime/ysh
+        uses: ./_/ci/grease
 
       - name: Download the exact signed APK and producer identity
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -363,7 +333,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HOLOMORPHIC_EMULATOR_ACCEPTED: ${{ needs.emulate.result }}
-        run: _/runtime/ysh _/shader/publish-qualification-apk.grease "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/artifacts/emulator" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-publication"
+        run: grease/bin/grease _/shader/publish-qualification-apk.grease "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/artifacts/emulator" "${{ github.event.pull_request.head.sha || github.sha }}" 8ecb501375110cb326e7fecb109f794185382112 "$GITHUB_WORKSPACE/_/build/qualification-publication"
 
       - name: Check out the unchanged pinned Cat Food installer
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -374,7 +344,7 @@ jobs:
           persist-credentials: false
 
       - name: Acquire the exact public APK through isolated deferred Cat Food file mode
-        run: _/runtime/ysh _/shader/acquire-qualification-apk.grease "$GITHUB_WORKSPACE/_/catfood-qualification" "$GITHUB_WORKSPACE/_/build/qualification-publication" "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/_/build/qualification-catfood-acquisition"
+        run: grease/bin/grease _/shader/acquire-qualification-apk.grease "$GITHUB_WORKSPACE/_/catfood-qualification" "$GITHUB_WORKSPACE/_/build/qualification-publication" "$GITHUB_WORKSPACE/artifacts/apk" "$GITHUB_WORKSPACE/_/build/qualification-catfood-acquisition"
 
       - name: Preserve qualification publication identity
         if: always()
