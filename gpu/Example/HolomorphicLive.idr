@@ -287,7 +287,10 @@ holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positio
       displayed_point = scale_components (1.0 / pixel_radius)
                               (subtract_components fragment_pixel (scale_components 0.5 resolution))
       numeric_mode = int_to_double numeric_output
-      numerical = numeric_mode > 0.0
+      -- Mode four renders the displayed field alone. It uses the ordinary
+      -- viewport coordinates, unlike the three explicit numeric probe modes.
+      field_only = numeric_mode == 4.0
+      numerical = if field_only then False else numeric_mode > 0.0
       raw_measure_output = numeric_mode == 1.0
       precolour_measure_output = numeric_mode == 3.0
       point = if numerical then numeric_point else displayed_point
@@ -299,13 +302,14 @@ holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positio
                      else if z divisor < 0.0 then vec3 1.0 1.0 1.0
                      else regular_color
       with_zero_marks = zero_overlays_from fragment_pixel resolution pixel_radius
-                                           (int_to_double zero_count) zeros
+                                           (if field_only then 0.0 else int_to_double zero_count) zeros
                                            0.0 wegert_color
       with_pole_marks = pole_overlays_from fragment_pixel resolution pixel_radius
-                                           (int_to_double pole_count) poles
+                                           (if field_only then 0.0 else int_to_double pole_count) poles
                                            0.0 with_zero_marks
       with_remote_marks = remote_overlays_from fragment_pixel resolution pixel_radius
-                                               24.0 remote_positions 0.0 with_pole_marks
+                                               (if field_only then 0.0 else 24.0)
+                                               remote_positions 0.0 with_pole_marks
       color = draw_placement_controls fragment_pixel resolution placement_kind
                                       with_remote_marks
       numerical_sample = numerical_measure divisor q
@@ -316,7 +320,7 @@ holomorphic_live ndc resolution zero_count pole_count zeros poles remote_positio
                                finite_marker (z divisor))
    in if raw_measure_output then numerical_sample
       else if precolour_measure_output then precolour_sample
-      else if numerical then vec4 (x wegert_color) (y wegert_color) (z wegert_color) 1.0
+      else if numeric_mode > 0.0 then vec4 (x wegert_color) (y wegert_color) (z wegert_color) 1.0
       else vec4 (x color) (y color) (z color) 1.0
 
 main : IO ()

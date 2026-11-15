@@ -9,12 +9,24 @@ plugins {
 // Google Play may override them for an explicitly versioned store build.
 val requestedVersionCode = System.getenv("PLAY_VERSION_CODE")
 val appVersionCode = when {
-    requestedVersionCode == null -> 3
+    requestedVersionCode == null -> 4
     else -> requestedVersionCode.toIntOrNull()
         ?.takeIf { it in 1..2_100_000_000 }
         ?: error("PLAY_VERSION_CODE must be between 1 and 2100000000")
 }
-val appVersionName = System.getenv("PLAY_VERSION_NAME") ?: "0.2.1"
+val appVersionName = System.getenv("PLAY_VERSION_NAME") ?: "0.2.2"
+
+// Keep emulator/portable qualification separate from the physical C67 payload.
+// Selecting C67 must never quietly package another architecture.
+val androidTarget = System.getenv("HOLOMORPHIC_ANDROID_TARGET") ?: "qualification"
+val targetAbis = when (androidTarget) {
+    "qualification" -> listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+    "c67" -> listOf("arm64-v8a")
+    else -> error("Unsupported HOLOMORPHIC_ANDROID_TARGET: $androidTarget")
+}
+check(androidTarget != "c67" || appVersionCode >= 4) {
+    "C67 performance APK must replace version 3 without a downgrade"
+}
 
 val uploadKeystorePath = System.getenv("ANDROID_UPLOAD_KEYSTORE_PATH")
 val uploadKeystorePassword = System.getenv("ANDROID_UPLOAD_KEYSTORE_PASSWORD")
@@ -174,7 +186,7 @@ android {
         manifestPlaceholders["appLabel"] = "Holomorphic Random Explorer"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += targetAbis
         }
 
         externalNativeBuild {

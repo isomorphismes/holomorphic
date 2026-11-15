@@ -1,12 +1,21 @@
 #!/usr/bin/env grease
 # Read the signed APK with the producer's declared SDK/NDK. Never modify it.
 set -o errexit -o nounset -o pipefail
-test "$#" -eq 5
+test "$#" -ge 5
+test "$#" -le 6
 var root = ARGV[0]
 var apk = ARGV[1]
 var source = ARGV[2]
 var backend = ARGV[3]
 var output = ARGV[4]
+var target = 'qualification'
+if (int($#) === 6) { setvar target = ARGV[5] }
+var abi_list = 'armeabi-v7a,arm64-v8a,x86_64'
+case "$target" in
+  qualification) ;;
+  c67) setvar abi_list = 'arm64-v8a' ;;
+  *) printf 'unsupported qualification target: %s\n' "$target" >&2; exit 2 ;;
+esac
 for path in "$root" "$apk" "$output" {
   case "$path" in /*) ;; *) echo 'absolute producer paths required' >&2; exit 2 ;; esac
 }
@@ -32,6 +41,7 @@ var version_code = $(awk -F "'" '/^package: / {print $4}' "$output/manifest-badg
 var version_name = $(awk -F "'" '/^package: / {print $6}' "$output/manifest-badging.txt")
 test "$package_id" = org.isomorphisms.analyticcontinuation.lasso.dev
 printf '%s\n' "$version_code" | grep -Eq '^[1-9][0-9]*$'
+if (target === 'c67') { test "$version_code" -ge 4 }
 printf '%s\n' "$version_name" | grep -Eq '^[[:alnum:].+_-]+$'
 test "$(grep -Ec '^Signer #[0-9]+ certificate SHA-256 digest:' "$output/signature-verification.txt")" -eq 1
 var certificate = $(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$output/signature-verification.txt" | tr 'A-F' 'a-f' | tr -d ':')
@@ -52,11 +62,13 @@ grep -Fxq "application_commit=$source" "$output/packaged.provenance"
 grep -Fxq "fragment_sha256=$fragment_digest" "$output/packaged.provenance"
 unzip -Z1 "$apk" | grep '^lib/' | grep -v '/$' | sort > "$output/native-entries.txt"
 test -s "$output/native-entries.txt"
-for abi in armeabi-v7a arm64-v8a x86_64 {
-  grep -Fq "lib/$abi/" "$output/native-entries.txt"
-}
-printf 'schema\tholomorphic-qualification-apk-identity-v1\napplication_repo\tisomorphismes/holomorphic\napplication_commit\t%s\nbackend_repo\tfuego-ironworks/idris-shader-backend\nbackend_commit\t%s\ncompiler\tidris2-glsles\nfragment_sha256\t%s\napk_sha256\t%s\napk_bytes\t%s\npackage_id\t%s\nversion_code\t%s\nversion_name\t%s\nsigner_sha256\t%s\nabi_list\tarmeabi-v7a,arm64-v8a,x86_64\npacked_native_strip\tPASS\nphysical_gpu\tNOT_RUN\nsustained_performance\tNOT_RUN\n' \
-  "$source" "$backend" "$fragment_digest" "$apk_digest" "$apk_bytes" "$package_id" "$version_code" "$version_name" "$certificate" > "$output/producer-identity.tsv.tmp"
+# An allowed-entry regex alone would accept an unwanted ARM32/x86 payload in
+# the C67 APK. Compare the complete distinct ABI set, including no extras.
+cut -d / -f 2 "$output/native-entries.txt" | sort -u > "$output/actual-abis.txt"
+printf '%s\n' "$abi_list" | tr ',' '\n' | sort > "$output/expected-abis.txt"
+cmp "$output/expected-abis.txt" "$output/actual-abis.txt"
+printf 'schema\tholomorphic-qualification-apk-identity-v1\napplication_repo\tisomorphismes/holomorphic\napplication_commit\t%s\nbackend_repo\tfuego-ironworks/idris-shader-backend\nbackend_commit\t%s\ncompiler\tidris2-glsles\nfragment_sha256\t%s\napk_sha256\t%s\napk_bytes\t%s\npackage_id\t%s\nversion_code\t%s\nversion_name\t%s\nsigner_sha256\t%s\nabi_list\t%s\npacked_native_strip\tPASS\nphysical_gpu\tNOT_RUN\nsustained_performance\tNOT_RUN\n' \
+  "$source" "$backend" "$fragment_digest" "$apk_digest" "$apk_bytes" "$package_id" "$version_code" "$version_name" "$certificate" "$abi_list" > "$output/producer-identity.tsv.tmp"
 while IFS= read -r entry {
   printf '%s\n' "$entry" | grep -Eq '^lib/(armeabi-v7a|arm64-v8a|x86_64)/[[:alnum:]_.+-]+[.]so$'
   var abi = $(printf '%s\n' "$entry" | cut -d / -f 2)

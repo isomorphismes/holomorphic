@@ -1,0 +1,40 @@
+#!/usr/bin/env grease
+# Actual APK negative control: a valid package must reject the other ABI target.
+# This checks the same identity inspector used for delivery, not a source grep.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 7
+var root = ARGV[0]
+var apk = ARGV[1]
+var source = ARGV[2]
+var backend = ARGV[3]
+var output = ARGV[4]
+var grease = ARGV[5]
+var actual_target = ARGV[6]
+var wrong_target = 'c67'
+case "$actual_target" in
+  qualification) ;;
+  c67) setvar wrong_target = 'qualification' ;;
+  *) echo 'expected actual qualification or c67 target' >&2; exit 2 ;;
+esac
+for path in "$root" "$apk" "$output" "$grease" {
+  case "$path" in /*) ;; *) echo 'absolute target-test paths required' >&2; exit 2 ;; esac
+}
+test -x "$grease"
+test -s "$apk"
+mkdir -p "$output"
+if "$grease" "$root/_/shader/prepare-qualification-apk.grease" \
+    "$root" "$apk" "$source" "$backend" "$output/rejected" "$wrong_target" \
+    > "$output/refusal.log" 2>&1 {
+  echo 'wrong ABI target was accepted' >&2
+  exit 1
+}
+# Prove refusal reached the complete ABI-set check. An interpreter, signer,
+# provenance, version, SDK or native-tool failure is not the intended kill.
+test -s "$output/rejected/actual-abis.txt"
+test -s "$output/rejected/expected-abis.txt"
+if cmp -s "$output/rejected/expected-abis.txt" "$output/rejected/actual-abis.txt" {
+  echo 'wrong target did not produce the intended ABI mismatch' >&2
+  exit 1
+}
+test ! -e "$output/rejected/producer-identity.tsv"
+printf 'PASS real APK rejects mismatched target: actual=%s refused=%s\n' "$actual_target" "$wrong_target"

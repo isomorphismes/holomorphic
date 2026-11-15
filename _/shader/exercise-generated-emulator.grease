@@ -14,15 +14,53 @@ var expected_digest = $(sha256sum "$fragment" | cut -d ' ' -f 1)
 var log = "$output/generated-holomorphic-emulator.log"
 adb install -r "$apk"
 adb install -r "$apk"
+# First exercise the ordinary interactive path. Its first presented frame must
+# not run qualification readbacks; retain this process separately from the
+# explicitly requested qualification process below.
+var interactive_log = "$output/generated-holomorphic-interactive.log"
 adb logcat -c
 adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
+var interactive_process = $(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r')
+printf '%s\n' "$interactive_process" | grep -Eq '^[0-9]+$'
+var interactive_attempts = 0
+var interactive_ready = false
+while (interactive_attempts < 35) {
+  adb logcat -d --pid="$interactive_process" > "$interactive_log"
+  if grep -Fq 'holomorphic field first frame: presented=1 readback=disabled marker_regions=localized remote_factors=24' "$interactive_log" {
+    setvar interactive_ready = true
+    break
+  }
+  sleep 1
+  setvar interactive_attempts += 1
+}
+test "$[interactive_ready]" = true
+sleep 2
+test "$(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r')" = "$interactive_process"
+adb logcat -d --pid="$interactive_process" > "$interactive_log"
+grep -Fq 'HOLO_QUALIFICATION status=NOT_RUN reason=interactive-launch explicit_intent=holo_qualification' "$interactive_log"
+if grep -Eq 'HOLO_GPU_(NUMERIC|COLOR_OUTPUT|LARGE_Q_OUTPUT)|HOLO_OVERLAY_' "$interactive_log" {
+  printf '\033[31mFAIL\033[0m ordinary interactive launch executed qualification readbacks\n'
+  exit 1
+}
+adb exec-out screencap -p > "$output/generated-holomorphic-interactive.png"
+adb shell am force-stop org.isomorphisms.analyticcontinuation.lasso.dev
+adb logcat -c
+# Capture before launch. The complete stream prevents the earlier 33/34-row
+# loss caused by dumping a bounded logcat ring after the readback burst.
+var stream = "$output/generated-holomorphic-logcat-stream.txt"
+fork {
+  try { timeout --signal=INT 50s adb logcat -v threadtime -b all > "$stream" }
+  if (_error.code !== 0 and _error.code !== 124) { exit 1 }
+}
+sleep 1
+adb shell am start -S -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity --ez holo_qualification true
 var process = $(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr -d '\r')
 printf '%s\n' "$process" | grep -Eq '^[0-9]+$'
 var attempts = 0
 var ready = false
 while (attempts < 35) {
   printf 'HOLO_PROCESS package=org.isomorphisms.analyticcontinuation.lasso.dev pid=%s\n' "$process" > "$log"
-  adb logcat -d --pid="$process" >> "$log"
+  awk -v process="$process" '$3 == process' "$stream" >> "$log"
   if grep -Fq 'holomorphic field first frame:' "$log" {
     setvar ready = true
     break
@@ -31,6 +69,9 @@ while (attempts < 35) {
   setvar attempts += 1
 }
 test "$[ready]" = true
+wait
+printf 'HOLO_PROCESS package=org.isomorphisms.analyticcontinuation.lasso.dev pid=%s\n' "$process" > "$log"
+awk -v process="$process" '$3 == process' "$stream" >> "$log"
 grep -Fq 'holomorphic field renderer ready:' "$log"
 grep -Fq 'holomorphic field GLSL backend selected: compiler=idris2-glsles fallback=none' "$log"
 grep -Fq 'holomorphic field shader bytes verified: mode=checked-idris compiler=idris2-glsles' "$log"
@@ -52,6 +93,13 @@ if ! grep -Fq 'HOLO_GPU_LARGE_Q_OUTPUT status=OUTPUT_READY raw_samples=2 precolo
   printf '\033[31mFAIL\033[0m required same-program large-q domain readbacks are unavailable; inspect native log\n'
   exit 1
 }
+grep -Fq 'HOLO_OVERLAY_QUALIFICATION status=PASS cases=12 mutants=2 comparator=exact-rgba8 selected_program=same remote_count=24 physical_C67=NOT_RUN' "$log"
+test "$(grep -Ec 'HOLO_OVERLAY_CASE name=[^ ]+ status=PASS ' "$log")" -eq 12
+test "$(grep -Ec 'HOLO_OVERLAY_MUTANT name=[^ ]+ status=REJECTED ' "$log")" -eq 2
+if grep -Eq 'HOLO_OVERLAY_(CASE|MUTANT|QUALIFICATION).*status=FAIL' "$log" {
+  printf '\033[31mFAIL\033[0m actual selected-shader overlay pixels or hostile controls failed\n'
+  exit 1
+}
 if grep -Eiq 'shader compilation failed|program link failed|shader uniforms unavailable|shader provenance rejected|legacy-handwritten|FATAL EXCEPTION' "$log" {
   printf '\033[31mFAIL\033[0m generated runtime selection or rendering failed\n'
   exit 1
@@ -63,5 +111,5 @@ test "$(adb shell pidof -s org.isomorphisms.analyticcontinuation.lasso.dev | tr 
 adb exec-out screencap -p > "$output/generated-holomorphic-frame-b.png"
 test -s "$output/generated-holomorphic-frame-a.png"
 test -s "$output/generated-holomorphic-frame-b.png"
-printf 'emulator_app_launch=PASS\nemulator_source_binding=PASS\nemulator_numeric_output=PASS\nemulator_color_output=PASS\nemulator_large_q_output=PASS\nemulator_numeric_parity=NOT_RUN\nemulator_color_parity=NOT_RUN\nemulator_large_q_acceptance=NOT_RUN\nphysical_gpu=NOT_RUN\n'
+printf 'emulator_app_launch=PASS\nemulator_interactive_readbacks_disabled=PASS\nemulator_source_binding=PASS\nemulator_overlay_pixels=PASS\nemulator_overlay_hostile_controls=PASS\nemulator_numeric_output=PASS\nemulator_color_output=PASS\nemulator_large_q_output=PASS\nemulator_numeric_parity=NOT_RUN\nemulator_color_parity=NOT_RUN\nemulator_large_q_acceptance=NOT_RUN\nphysical_gpu=NOT_RUN\n'
 sha256sum "$apk" "$fragment" "$log"

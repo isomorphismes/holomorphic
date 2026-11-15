@@ -1,4 +1,5 @@
 #include <android/asset_manager.h>
+#include <android/choreographer.h>
 #include <android/input.h>
 #include <android/log.h>
 #include <android/native_activity.h>
@@ -24,6 +25,8 @@
 #define LOG_TAG "AnalyticContinuation"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+#include "holo_frame_samples.h"
 
 #define MAX_FACTORS 32
 
@@ -92,6 +95,14 @@ struct engine {
     bool deformation_workers_started;
     bool deformation_direction_ready;
     bool focused;
+    AChoreographer *choreographer;
+    bool frame_callback_pending;
+    bool frame_ready;
+    uint64_t pacing_callbacks;
+    uint64_t pacing_ticks;
+    uint64_t pacing_wait_samples;
+    double pacing_wait_wall_ms;
+    double pacing_wait_max_wall_ms;
 
     float zoom;
     float pinch_start_distance;
@@ -109,6 +120,10 @@ struct engine {
     bool dirty;
     bool logged_first_frame;
     bool numeric_probe_attempted;
+    bool qualification_requested;
+    bool performance_reference_fullscreen;
+    bool performance_frozen_pose;
+    struct holo_frame_samples performance_samples;
     struct holo_gpu_timer gpu_timer;
     uint64_t timing_frames;
     double timing_submission_cpu_ms;
@@ -120,6 +135,18 @@ static double monotonic_seconds(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (double)now.tv_sec + 1.0e-9 * (double)now.tv_nsec;
+}
+
+/* The callback runs on this app thread's looper. A single outstanding request
+ * supplies display cadence without an additional fixed delay before swapping.
+ * The legacy callback's long timestamp is deliberately unused: it may wrap on
+ * a 32-bit ABI, and CPU callback arrival is not a GPU/presentation timestamp. */
+static void display_frame_callback(long frame_time_nanos, void *data) {
+    (void)frame_time_nanos;
+    struct engine *engine = data;
+    engine->frame_callback_pending = false;
+    engine->frame_ready = true;
+    ++engine->pacing_callbacks;
 }
 
 static void initialize_state(struct engine *engine) {
@@ -142,6 +169,14 @@ static void initialize_state(struct engine *engine) {
     engine->deformation_workers_started = false;
     engine->deformation_direction_ready = false;
     engine->focused = false;
+    engine->choreographer = NULL;
+    engine->frame_callback_pending = false;
+    engine->frame_ready = false;
+    engine->pacing_callbacks = 0;
+    engine->pacing_ticks = 0;
+    engine->pacing_wait_samples = 0;
+    engine->pacing_wait_wall_ms = 0.0;
+    engine->pacing_wait_max_wall_ms = 0.0;
 
     engine->zoom = 1.0f;
     engine->pinch_start_distance = 0.0f;
@@ -849,6 +884,97 @@ static void run_numeric_probes(struct engine *engine) {
         valid && produced_color_samples == 34 ? "OUTPUT_READY" : "FAIL", produced_color_samples);
 }
 
+/* Qualification is an explicit launch option, never startup work for a normal
+ * interactive launch. NativeActivity's app thread is not the Java UI thread. */
+static bool launch_boolean_extra(struct engine *engine, const char *extra_name) {
+    JavaVM *vm = engine->app->activity->vm;
+    JNIEnv *environment = NULL;
+    bool attached = false;
+    jint status = (*vm)->GetEnv(vm, (void **)&environment, JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if ((*vm)->AttachCurrentThread(vm, &environment, NULL) != JNI_OK) {
+            LOGE("HOLO_QUALIFICATION status=NOT_RUN reason=jni-attach");
+            return false;
+        }
+        attached = true;
+    } else if (status != JNI_OK) {
+        LOGE("HOLO_QUALIFICATION status=NOT_RUN reason=jni-environment");
+        return false;
+    }
+    bool requested = false;
+    jobject activity = engine->app->activity->clazz;
+    jclass activity_class = (*environment)->GetObjectClass(environment, activity);
+    jmethodID get_intent = activity_class == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->GetMethodID(environment, activity_class, "getIntent", "()Landroid/content/Intent;");
+    jobject intent = get_intent == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->CallObjectMethod(environment, activity, get_intent);
+    jclass intent_class = intent == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->GetObjectClass(environment, intent);
+    jmethodID get_boolean = intent_class == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->GetMethodID(environment, intent_class, "getBooleanExtra", "(Ljava/lang/String;Z)Z");
+    jstring key = (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->NewStringUTF(environment, extra_name);
+    if (get_boolean != NULL && key != NULL && !(*environment)->ExceptionCheck(environment)) {
+        requested = (*environment)->CallBooleanMethod(environment, intent, get_boolean, key, JNI_FALSE) == JNI_TRUE;
+    }
+    if ((*environment)->ExceptionCheck(environment)) {
+        (*environment)->ExceptionClear(environment);
+        LOGE("HOLO_QUALIFICATION status=NOT_RUN reason=intent-read");
+        requested = false;
+    }
+    if (key != NULL) (*environment)->DeleteLocalRef(environment, key);
+    if (intent_class != NULL) (*environment)->DeleteLocalRef(environment, intent_class);
+    if (intent != NULL) (*environment)->DeleteLocalRef(environment, intent);
+    if (activity_class != NULL) (*environment)->DeleteLocalRef(environment, activity_class);
+    if (attached) (*vm)->DetachCurrentThread(vm);
+    return requested;
+}
+
+/* The conservative bounds include every antialiased ring/X sample, including
+ * strokes whose center is outside the viewport. Bounds affect presentation
+ * only: all world-space factors stay in the reduced mathematical divisor. */
+static void draw_marker_region(struct engine *engine, const float position[2]) {
+    double radius = 0.42 * (double)(engine->width < engine->height ? engine->width : engine->height) * engine->zoom;
+    double center_x = 0.5 * engine->width + radius * position[0];
+    double center_y = 0.5 * engine->height + radius * position[1];
+    if (!isfinite(center_x) || !isfinite(center_y) ||
+        center_x + 12.0 <= 0.0 || center_y + 12.0 <= 0.0 ||
+        center_x - 12.0 >= engine->width || center_y - 12.0 >= engine->height) return;
+    int left = (int)fmax(0.0, floor(center_x - 12.0));
+    int bottom = (int)fmax(0.0, floor(center_y - 12.0));
+    int right = (int)fmin((double)engine->width, ceil(center_x + 12.0));
+    int top = (int)fmin((double)engine->height, ceil(center_y + 12.0));
+    glScissor(left, bottom, right - left, top - bottom);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+/* Replaying the same complete compositing function in each bounded region
+ * preserves exact zero -> pole -> remote -> controls order, even at overlaps.
+ * No framebuffer blending or separately authored marker shader is involved. */
+static void draw_checked_scene(struct engine *engine, bool localized) {
+    glDisable(GL_SCISSOR_TEST);
+    glUniform1i(engine->numeric_output_location, localized ? 4 : 0);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (!localized) return;
+    glUniform1i(engine->numeric_output_location, 0);
+    glEnable(GL_SCISSOR_TEST);
+    for (int index = 0; index < engine->zero_count; ++index)
+        draw_marker_region(engine, engine->zero_positions[index]);
+    for (int index = 0; index < engine->pole_count; ++index)
+        draw_marker_region(engine, engine->pole_positions[index]);
+    for (int index = 0; index < HOLOMORPHIC_REMOTE_POLE_COUNT; ++index)
+        draw_marker_region(engine, engine->remote_pole_positions[index]);
+    double side = (double)(engine->width < engine->height ? engine->width : engine->height);
+    double control_radius = fmin(38.0, fmax(26.0, 0.048 * side));
+    int control_width = (int)fmin((double)engine->width, ceil(4.0 * control_radius + 32.0));
+    int control_height = (int)fmin((double)engine->height, ceil(2.0 * control_radius + 18.0));
+    glScissor(0, 0, control_width, control_height);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDisable(GL_SCISSOR_TEST);
+}
+
+#include "holo_overlay_qualification.h"
+
 static void draw_frame(struct engine *engine) {
     if (
         engine->display == EGL_NO_DISPLAY || engine->program == 0 ||
@@ -859,9 +985,16 @@ static void draw_frame(struct engine *engine) {
 
     if (!engine->numeric_probe_attempted) {
         engine->numeric_probe_attempted = true;
-        run_numeric_probes(engine);
+        if (engine->qualification_requested) {
+            run_numeric_probes(engine);
+            if (HOLOMORPHIC_REQUIRE_GENERATED_SHADER) qualify_overlay_pixels(engine);
+        } else {
+            LOGI("HOLO_QUALIFICATION status=NOT_RUN reason=interactive-launch explicit_intent=holo_qualification");
+        }
     }
 
+    bool capturing_performance = holo_frame_samples_collecting(&engine->performance_samples);
+    double preparation_start = monotonic_seconds();
     struct holomorphic_divisor divisor;
     for (int index = 0; index < HOLOMORPHIC_REMOTE_POLE_COUNT; ++index) {
         if (!holomorphic_remote_pole(index, (double)engine->remote_pole_time,
@@ -877,6 +1010,7 @@ static void draw_frame(struct engine *engine) {
         LOGE("holomorphic divisor reduction rejected: invalid input or capacity overflow");
         return;
     }
+    double upload_start = monotonic_seconds();
     glUseProgram(engine->program);
     glUniform2f(engine->resolution_location, (float)engine->width, (float)engine->height);
     glUniform1i(engine->zero_count_location, engine->zero_count);
@@ -906,13 +1040,15 @@ static void draw_frame(struct engine *engine) {
 
     glBindVertexArray(engine->vao);
     double submission_start = monotonic_seconds();
-    if (engine->timing_window_start == 0.0) engine->timing_window_start = submission_start;
-    int gpu_query = holo_gpu_timer_begin(&engine->gpu_timer, engine->timing_frames);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (!capturing_performance && engine->timing_window_start == 0.0) engine->timing_window_start = submission_start;
+    int gpu_query = capturing_performance ? -1 : holo_gpu_timer_begin(&engine->gpu_timer, engine->timing_frames);
+    if (HOLOMORPHIC_REQUIRE_GENERATED_SHADER) draw_checked_scene(engine, !engine->performance_reference_fullscreen);
+    else glDrawArrays(GL_TRIANGLES, 0, 3);
     holo_gpu_timer_end(&engine->gpu_timer, gpu_query);
-    engine->timing_submission_cpu_ms += (monotonic_seconds() - submission_start) * 1000.0;
+    double submission_end = monotonic_seconds();
+    if (!capturing_performance) engine->timing_submission_cpu_ms += (submission_end - submission_start) * 1000.0;
 
-    if (!engine->logged_first_frame) {
+    if (!engine->logged_first_frame && engine->qualification_requested) {
         GLubyte center_pixel[4] = {0, 0, 0, 0};
         glReadPixels(
             engine->width ÷ 2, engine->height ÷ 2, 1, 1,
@@ -922,14 +1058,35 @@ static void draw_frame(struct engine *engine) {
             "holomorphic field first frame: center rgba=%u,%u,%u,%u",
             center_pixel[0], center_pixel[1], center_pixel[2], center_pixel[3]
         );
-        engine->logged_first_frame = true;
     }
 
     double presentation_start = monotonic_seconds();
-    if (!eglSwapBuffers(engine->display, engine->surface)) {
+    bool presented = eglSwapBuffers(engine->display, engine->surface) == EGL_TRUE;
+    if (!presented) {
         LOGE("eglSwapBuffers failed: 0x%x", eglGetError());
     }
     double presentation_end = monotonic_seconds();
+    if (presented && !engine->logged_first_frame) {
+        LOGI("holomorphic field first frame: presented=1 readback=%s marker_regions=%s remote_factors=24",
+            engine->qualification_requested ? "qualification" : "disabled",
+            HOLOMORPHIC_REQUIRE_GENERATED_SHADER ?
+                (engine->performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized") : "legacy-reference");
+        engine->logged_first_frame = true;
+    }
+    holo_frame_samples_record(&engine->performance_samples,
+        (upload_start - preparation_start) * 1000.0,
+        (submission_start - upload_start) * 1000.0,
+        (submission_end - submission_start) * 1000.0,
+        (presentation_end - presentation_start) * 1000.0,
+        presentation_end, presented);
+    if (capturing_performance && !holo_frame_samples_collecting(&engine->performance_samples)) {
+        struct holomorphic_walk_cpu_performance discarded_window;
+        holomorphic_walk_take_cpu_performance(&discarded_window);
+    }
+    if (capturing_performance) {
+        engine->dirty = false;
+        return;
+    }
     engine->timing_presentation_cpu_ms += (presentation_end - presentation_start) * 1000.0;
     ++engine->timing_frames;
     if (engine->timing_frames % 8u == 0u) holo_gpu_timer_poll(&engine->gpu_timer);
@@ -1125,6 +1282,7 @@ static void publish_deformation_snapshot(struct engine *engine, double now) {
 }
 
 static void log_holomorphic_state(struct engine *engine, double now, float score) {
+    if (holo_frame_samples_collecting(&engine->performance_samples)) return;
     if (now - engine->deformation_last_log < 2.0) {
         return;
     }
@@ -1387,6 +1545,7 @@ static void handle_command(struct android_app *app, int32_t command) {
             }
             break;
         case APP_CMD_TERM_WINDOW:
+            engine->frame_ready = false;
             terminate_display(engine);
             break;
         case APP_CMD_WINDOW_RESIZED:
@@ -1401,6 +1560,7 @@ static void handle_command(struct android_app *app, int32_t command) {
             break;
         case APP_CMD_LOST_FOCUS:
             engine->focused = false;
+            engine->frame_ready = false;
             break;
         default:
             break;
@@ -1419,6 +1579,30 @@ void android_main(struct android_app *app) {
         .logged_first_frame = false
     };
     initialize_state(&engine);
+    engine.qualification_requested = launch_boolean_extra(&engine, "holo_qualification");
+    bool performance_requested = launch_boolean_extra(&engine, "holo_performance");
+    if (performance_requested && !HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
+        LOGE("HOLO_PERF_CAPTURE status=FAIL reason=checked-generated-program-required");
+    } else if (performance_requested && !engine.qualification_requested) {
+        if (!holo_frame_samples_begin(&engine.performance_samples, app->activity->internalDataPath)) {
+            LOGE("HOLO_PERF_CAPTURE status=FAIL reason=capture-allocation-or-path");
+        } else {
+            engine.performance_reference_fullscreen = launch_boolean_extra(&engine, "holo_reference_fullscreen");
+            engine.performance_frozen_pose = launch_boolean_extra(&engine, "holo_frozen_pose");
+            if (engine.performance_frozen_pose) {
+                engine.remote_pole_time = 0.375f;
+                engine.holomorphic_coefficients[0][0] = 0.03125f;
+                engine.holomorphic_coefficients[1][1] = -0.015625f;
+                engine.holomorphic_coefficients[4][0] = 0.000244140625f;
+            }
+            LOGI("HOLO_PERF_CAPTURE status=READY samples=1800 overlay_mode=%s frozen_pose=%d remote_count=24 "
+                 "gpu_timer=DISABLED_DURING_CAPTURE thermal=NOT_MEASURED",
+                engine.performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized",
+                engine.performance_frozen_pose);
+        }
+    } else if (performance_requested) {
+        LOGE("HOLO_PERF_CAPTURE status=FAIL reason=qualification-and-performance-conflict");
+    }
 
     engine.deformation_workers_started = holomorphic_walk_start();
     if (engine.deformation_workers_started) {
@@ -1436,29 +1620,90 @@ void android_main(struct android_app *app) {
     app->onAppCmd = handle_command;
     app->onInputEvent = handle_input;
 
+    engine.choreographer = AChoreographer_getInstance();
+    if (engine.choreographer == NULL) {
+        LOGE("HOLO_FRAME_PACING status=NOT_RUN reason=app-thread-choreographer-unavailable");
+        if (engine.deformation_workers_started) holomorphic_walk_stop();
+        holo_frame_samples_dispose(&engine.performance_samples);
+        ANativeActivity_finish(app->activity);
+        return;
+    }
+    LOGI("HOLO_FRAME_PACING status=READY mechanism=AChoreographer fixed_poll_delay_ms=0");
+
+    unsigned ready_event_drains = 0;
     while (true) {
         int events = 0;
         struct android_poll_source *source = NULL;
         bool can_animate = engine.display != EGL_NO_DISPLAY && engine.focused;
-        int timeout = can_animate ? 16 : (engine.dirty ? 0 : -1);
+        if (can_animate && !engine.frame_callback_pending && !engine.frame_ready) {
+            engine.frame_callback_pending = true;
+            AChoreographer_postFrameCallback(engine.choreographer,
+                display_frame_callback, &engine);
+        }
+        /* A ready display tick permits a bounded zero-time drain of queued
+         * input and lifecycle events. Otherwise the looper sleeps until an
+         * event or the one requested callback arrives, including unfocused. */
+        int timeout = can_animate && engine.frame_ready ? 0 : -1;
+        double wait_start = monotonic_seconds();
         int ident = ALooper_pollOnce(timeout, NULL, &events, (void **)&source);
+        double wait_wall_ms = (monotonic_seconds() - wait_start) * 1000.0;
+        if (can_animate) {
+            ++engine.pacing_wait_samples;
+            engine.pacing_wait_wall_ms += wait_wall_ms;
+            if (wait_wall_ms > engine.pacing_wait_max_wall_ms) {
+                engine.pacing_wait_max_wall_ms = wait_wall_ms;
+            }
+        }
 
         if (ident >= 0 && source != NULL) {
             source->process(app, source);
         }
-        if (app->destroyRequested != 0) {
+        if (app->destroyRequested != 0 || ident == ALOOPER_POLL_ERROR) {
+            if (ident == ALOOPER_POLL_ERROR) {
+                LOGE("HOLO_FRAME_PACING status=FAIL reason=looper-poll-error");
+                ANativeActivity_finish(app->activity);
+            }
             if (engine.deformation_workers_started) {
                 holomorphic_walk_stop();
                 engine.deformation_workers_started = false;
             }
             terminate_display(&engine);
+            holo_frame_samples_dispose(&engine.performance_samples);
             return;
         }
-        if (engine.display != EGL_NO_DISPLAY && engine.focused) {
-            advance_holomorphic_function(&engine);
+        if (engine.display == EGL_NO_DISPLAY || !engine.focused) {
+            engine.frame_ready = false;
+            ready_event_drains = 0;
+            continue;
         }
+        if (!engine.frame_ready) continue;
+        /* A continuous event stream must not starve an already-ready frame.
+         * Further input remains queued and is handled before the next tick. */
+        if (ident != ALOOPER_POLL_TIMEOUT && ++ready_event_drains < 8u) continue;
+
+        ready_event_drains = 0;
+        engine.frame_ready = false;
+        if (engine.performance_frozen_pose) engine.dirty = true;
+        else advance_holomorphic_function(&engine);
         if (engine.dirty) {
             draw_frame(&engine);
+        }
+        ++engine.pacing_ticks;
+        if (engine.pacing_ticks == 60) {
+            if (!holo_frame_samples_collecting(&engine.performance_samples))
+            LOGI("HOLO_FRAME_PACING status=MEASURED mechanism=AChoreographer ticks=60 "
+                 "callbacks=%llu poll_calls=%llu poll_wait_wall_mean_ms=%.9g "
+                 "poll_wait_wall_max_ms=%.9g gpu_execution_ms=NOT_MEASURED_BY_POLL",
+                (unsigned long long)engine.pacing_callbacks,
+                (unsigned long long)engine.pacing_wait_samples,
+                engine.pacing_wait_samples == 0 ? 0.0 :
+                    engine.pacing_wait_wall_ms ÷ (double)engine.pacing_wait_samples,
+                engine.pacing_wait_max_wall_ms);
+            engine.pacing_callbacks = 0;
+            engine.pacing_ticks = 0;
+            engine.pacing_wait_samples = 0;
+            engine.pacing_wait_wall_ms = 0.0;
+            engine.pacing_wait_max_wall_ms = 0.0;
         }
     }
 }

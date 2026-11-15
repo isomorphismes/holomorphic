@@ -24,9 +24,9 @@ struct holo_gpu_timer {
     unsigned next_slot;
     uint64_t attempts, samples, busy, rejected;
     double total_ms, max_ms;
-    void (GL_APIENTRYP *begin)(GLenum, GLuint);
-    void (GL_APIENTRYP *end)(GLenum);
-    void (GL_APIENTRYP *get64)(GLuint, GLenum, GLuint64 *);
+    void (GL_APIENTRYP begin)(GLenum, GLuint);
+    void (GL_APIENTRYP end)(GLenum);
+    void (GL_APIENTRYP get64)(GLuint, GLenum, GLuint64 *);
 };
 
 static inline void holo_gpu_timer_init(struct holo_gpu_timer *timer, bool generated) {
@@ -45,11 +45,11 @@ static inline void holo_gpu_timer_init(struct holo_gpu_timer *timer, bool genera
     }
     if (!available) return;
     timer->reason = "entrypoint-missing";
-    timer->begin = (void (GL_APIENTRYP *)(GLenum, GLuint))
+    timer->begin = (void (GL_APIENTRYP)(GLenum, GLuint))
         eglGetProcAddress("glBeginQueryEXT");
-    timer->end = (void (GL_APIENTRYP *)(GLenum))
+    timer->end = (void (GL_APIENTRYP)(GLenum))
         eglGetProcAddress("glEndQueryEXT");
-    timer->get64 = (void (GL_APIENTRYP *)(GLuint, GLenum, GLuint64 *))
+    timer->get64 = (void (GL_APIENTRYP)(GLuint, GLenum, GLuint64 *))
         eglGetProcAddress("glGetQueryObjectui64vEXT");
     if (timer->begin == NULL || timer->end == NULL || timer->get64 == NULL) return;
     glGenQueries(HOLO_GPU_TIMER_SLOTS, timer->query_ids);
