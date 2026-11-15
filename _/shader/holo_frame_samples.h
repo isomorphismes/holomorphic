@@ -28,7 +28,12 @@ struct holo_frame_sample {
 
 struct holo_frame_samples {
     struct holo_frame_sample *rows;
+    char *capture_directory;
     char *output_path;
+    char application_commit[41];
+    char fragment_sha256[65];
+    char overlay_mode[24];
+    bool frozen_pose;
     unsigned count;
     unsigned failed_swaps;
     unsigned invalid_phases;
@@ -90,6 +95,10 @@ static bool holo_frame_samples_finish(struct holo_frame_samples *capture) {
         return false;
     }
     fprintf(receipt, "collection_status\t%s\n", collection_status);
+    fprintf(receipt, "capture_directory\t%s\n", capture->capture_directory);
+    fprintf(receipt, "application_commit\t%s\nfragment_sha256\t%s\noverlay_mode\t%s\nfrozen_pose\t%d\n",
+        capture->application_commit, capture->fragment_sha256,
+        capture->overlay_mode, capture->frozen_pose);
     fprintf(receipt, "sample_limit\t%u\nnominal_refresh_hz\t60\nactual_refresh_hz\tUNKNOWN\n",
         HOLO_FRAME_SAMPLE_LIMIT);
     fprintf(receipt, "nominal_interval_budget_ms\t%.7g\n", HOLO_FRAME_NOMINAL_INTERVAL_MS);
@@ -162,17 +171,32 @@ static bool holo_frame_samples_begin(struct holo_frame_samples *capture,
                                      const char *internal_data_path) {
     memset(capture, 0, sizeof(*capture));
     if (internal_data_path == NULL || internal_data_path[0] == '\0') return false;
-    const char suffix[] = "/holo-performance.tsv";
-    size_t path_size = strlen(internal_data_path) + sizeof(suffix);
+    const char directory_suffix[] = "/holo-performance-XXXXXX";
+    const char filename[] = "/frames.tsv";
+    size_t directory_size = strlen(internal_data_path) + sizeof(directory_suffix);
+    size_t path_size = directory_size + sizeof(filename);
+    capture->capture_directory = malloc(directory_size);
     capture->output_path = malloc(path_size);
     capture->rows = calloc(HOLO_FRAME_SAMPLE_LIMIT, sizeof(*capture->rows));
-    if (capture->output_path == NULL || capture->rows == NULL) {
+    if (capture->capture_directory == NULL || capture->output_path == NULL || capture->rows == NULL) {
+        free(capture->capture_directory);
         free(capture->output_path);
         free(capture->rows);
         memset(capture, 0, sizeof(*capture));
         return false;
     }
-    snprintf(capture->output_path, path_size, "%s%s", internal_data_path, suffix);
+    snprintf(capture->capture_directory, directory_size, "%s%s", internal_data_path, directory_suffix);
+    if (mkdtemp(capture->capture_directory) == NULL) {
+        free(capture->capture_directory);
+        free(capture->output_path);
+        free(capture->rows);
+        memset(capture, 0, sizeof(*capture));
+        return false;
+    }
+    snprintf(capture->output_path, path_size, "%s%s", capture->capture_directory, filename);
+    snprintf(capture->application_commit, sizeof(capture->application_commit), "%s", "UNKNOWN");
+    snprintf(capture->fragment_sha256, sizeof(capture->fragment_sha256), "%s", "UNKNOWN");
+    snprintf(capture->overlay_mode, sizeof(capture->overlay_mode), "%s", "UNKNOWN");
     return true;
 }
 
@@ -215,6 +239,7 @@ static void holo_frame_samples_dispose(struct holo_frame_samples *capture) {
     if (capture->rows != NULL && !capture->finished && capture->count > 0)
         holo_frame_samples_finish(capture);
     free(capture->rows);
+    free(capture->capture_directory);
     free(capture->output_path);
     memset(capture, 0, sizeof(*capture));
 }

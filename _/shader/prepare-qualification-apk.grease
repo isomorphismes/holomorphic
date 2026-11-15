@@ -13,7 +13,9 @@ if (int($#) === 6) { setvar target = ARGV[5] }
 var abi_list = 'armeabi-v7a,arm64-v8a,x86_64'
 case "$target" in
   qualification) ;;
-  c67) setvar abi_list = 'arm64-v8a' ;;
+  c67)
+    setvar abi_list = 'arm64-v8a'
+    ;;
   *) printf 'unsupported qualification target: %s\n' "$target" >&2; exit 2 ;;
 esac
 for path in "$root" "$apk" "$output" {

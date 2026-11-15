@@ -994,6 +994,10 @@ static void draw_frame(struct engine *engine) {
     }
 
     bool capturing_performance = holo_frame_samples_collecting(&engine->performance_samples);
+    if (capturing_performance && engine->performance_samples.count == 0) {
+        struct holomorphic_walk_cpu_performance startup_worker_window;
+        holomorphic_walk_take_cpu_performance(&startup_worker_window);
+    }
     double preparation_start = monotonic_seconds();
     struct holomorphic_divisor divisor;
     for (int index = 0; index < HOLOMORPHIC_REMOTE_POLE_COUNT; ++index) {
@@ -1073,15 +1077,24 @@ static void draw_frame(struct engine *engine) {
                 (engine->performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized") : "legacy-reference");
         engine->logged_first_frame = true;
     }
+    struct holomorphic_walk_cpu_performance captured_worker_window = {0};
+    bool finishing_capture = capturing_performance &&
+        engine->performance_samples.count + 1u == HOLO_FRAME_SAMPLE_LIMIT;
+    if (finishing_capture) holomorphic_walk_take_cpu_performance(&captured_worker_window);
     holo_frame_samples_record(&engine->performance_samples,
         (upload_start - preparation_start) * 1000.0,
         (submission_start - upload_start) * 1000.0,
         (submission_end - submission_start) * 1000.0,
         (presentation_end - presentation_start) * 1000.0,
         presentation_end, presented);
-    if (capturing_performance && !holo_frame_samples_collecting(&engine->performance_samples)) {
-        struct holomorphic_walk_cpu_performance discarded_window;
-        holomorphic_walk_take_cpu_performance(&discarded_window);
+    if (finishing_capture) {
+        LOGI("HOLO_PERF_WORKER_CPU status=%s searches=%llu cpu_clock_samples=%llu invalid=%llu "
+             "total_thread_cpu_ms=%.9g raw_tsv=%s gpu_execution_ms=NOT_MEASURED_BY_WORKER_CLOCK",
+            captured_worker_window.measured > 0 && captured_worker_window.invalid == 0 ? "MEASURED" : "NOT_RUN",
+            (unsigned long long)captured_worker_window.searches,
+            (unsigned long long)captured_worker_window.measured,
+            (unsigned long long)captured_worker_window.invalid,
+            captured_worker_window.cpu_thread_ms, engine->performance_samples.output_path);
     }
     if (capturing_performance) {
         engine->dirty = false;
@@ -1419,6 +1432,8 @@ static int32_t handle_input(struct android_app *app, AInputEvent *event) {
     if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION) {
         return 0;
     }
+    /* Only the explicitly selected frozen benchmark suppresses editing. */
+    if (engine->performance_frozen_pose) return 1;
 
     int32_t masked_action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
     size_t pointer_count = AMotionEvent_getPointerCount(event);
@@ -1589,6 +1604,14 @@ void android_main(struct android_app *app) {
         } else {
             engine.performance_reference_fullscreen = launch_boolean_extra(&engine, "holo_reference_fullscreen");
             engine.performance_frozen_pose = launch_boolean_extra(&engine, "holo_frozen_pose");
+            snprintf(engine.performance_samples.application_commit,
+                sizeof(engine.performance_samples.application_commit), "%s", HOLOMORPHIC_APPLICATION_COMMIT);
+            snprintf(engine.performance_samples.fragment_sha256,
+                sizeof(engine.performance_samples.fragment_sha256), "%s", HOLOMORPHIC_FRAGMENT_SHA256);
+            snprintf(engine.performance_samples.overlay_mode,
+                sizeof(engine.performance_samples.overlay_mode), "%s",
+                engine.performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized");
+            engine.performance_samples.frozen_pose = engine.performance_frozen_pose;
             if (engine.performance_frozen_pose) {
                 engine.remote_pole_time = 0.375f;
                 engine.holomorphic_coefficients[0][0] = 0.03125f;
@@ -1596,9 +1619,9 @@ void android_main(struct android_app *app) {
                 engine.holomorphic_coefficients[4][0] = 0.000244140625f;
             }
             LOGI("HOLO_PERF_CAPTURE status=READY samples=1800 overlay_mode=%s frozen_pose=%d remote_count=24 "
-                 "gpu_timer=DISABLED_DURING_CAPTURE thermal=NOT_MEASURED",
+                 "gpu_timer=DISABLED_DURING_CAPTURE thermal=NOT_MEASURED raw_tsv=%s",
                 engine.performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized",
-                engine.performance_frozen_pose);
+                engine.performance_frozen_pose, engine.performance_samples.output_path);
         }
     } else if (performance_requested) {
         LOGE("HOLO_PERF_CAPTURE status=FAIL reason=qualification-and-performance-conflict");

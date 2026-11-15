@@ -12,6 +12,9 @@
 #define LOGE(...) ((void)0)
 #include "../shader/holo_frame_samples.h"
 
+#define TEST_APPLICATION_COMMIT "1111111111111111111111111111111111111111"
+#define TEST_FRAGMENT_SHA256 "2222222222222222222222222222222222222222222222222222222222222222"
+
 static bool file_exists(const char *path) {
     FILE *file = fopen(path, "r");
     if (file == NULL) return false;
@@ -31,8 +34,13 @@ static void verify_complete_receipt(const char *path) {
     char line[2048];
     unsigned rows = 0, summaries = 0, previous_successful_index = 0;
     bool complete = false, intervals = false, first_excluded = false;
+    bool application = false, fragment = false, overlay = false, frozen = false;
     while (fgets(line, sizeof(line), receipt) != NULL) {
         if (strcmp(line, "collection_status\tCOMPLETE\n") == 0) complete = true;
+        if (strcmp(line, "application_commit\t" TEST_APPLICATION_COMMIT "\n") == 0) application = true;
+        if (strcmp(line, "fragment_sha256\t" TEST_FRAGMENT_SHA256 "\n") == 0) fragment = true;
+        if (strcmp(line, "overlay_mode\tlocalized\n") == 0) overlay = true;
+        if (strcmp(line, "frozen_pose\t1\n") == 0) frozen = true;
         if (strcmp(line, "interval_summary\tvalid=1797\tover_nominal_budget=1\tfailed_swaps=2\tinvalid_phases=0\n") == 0)
             intervals = true;
         if (strncmp(line, "summary\t", 8) == 0) {
@@ -86,6 +94,7 @@ static void verify_complete_receipt(const char *path) {
     }
     assert(ferror(receipt) == 0 && fclose(receipt) == 0);
     assert(rows == 1800 && summaries == 5 && complete && intervals && first_excluded);
+    assert(application && fragment && overlay && frozen);
 }
 
 int main(int argc, char **argv) {
@@ -94,6 +103,10 @@ int main(int argc, char **argv) {
     make_directory(directory, argv[1], "complete");
     struct holo_frame_samples capture;
     assert(holo_frame_samples_begin(&capture, directory));
+    snprintf(capture.application_commit, sizeof(capture.application_commit), "%s", TEST_APPLICATION_COMMIT);
+    snprintf(capture.fragment_sha256, sizeof(capture.fragment_sha256), "%s", TEST_FRAGMENT_SHA256);
+    snprintf(capture.overlay_mode, sizeof(capture.overlay_mode), "%s", "localized");
+    capture.frozen_pose = true;
     assert(strlen(capture.output_path) < sizeof(path));
     strcpy(path, capture.output_path);
     for (unsigned index = 0; index < 1800; ++index) {
@@ -111,8 +124,23 @@ int main(int argc, char **argv) {
     assert(capture.rows == NULL && capture.output_path == NULL);
     verify_complete_receipt(path);
 
-    make_directory(directory, argv[1], "partial");
+    /* A restarted capture under the same app-data parent must never point at
+     * its predecessor's COMPLETE receipt, even if killed before the first row. */
+    char previous_path[PATH_MAX];
+    strcpy(previous_path, path);
     assert(holo_frame_samples_begin(&capture, directory));
+    assert(strcmp(capture.output_path, previous_path) != 0);
+    assert(!file_exists(capture.output_path));
+    verify_complete_receipt(previous_path);
+    assert(strlen(capture.output_path) < sizeof(path));
+    strcpy(path, capture.output_path);
+    holo_frame_samples_dispose(&capture);
+    assert(!file_exists(path));
+    verify_complete_receipt(previous_path);
+
+    assert(holo_frame_samples_begin(&capture, directory));
+    assert(strcmp(capture.output_path, previous_path) != 0);
+    assert(strcmp(capture.output_path, path) != 0);
     assert(strlen(capture.output_path) < sizeof(path));
     strcpy(path, capture.output_path);
     holo_frame_samples_record(&capture, 1.0, 2.0, 3.0, 4.0, 2000.0, true);

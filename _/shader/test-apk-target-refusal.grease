@@ -13,7 +13,9 @@ var actual_target = ARGV[6]
 var wrong_target = 'c67'
 case "$actual_target" in
   qualification) ;;
-  c67) setvar wrong_target = 'qualification' ;;
+  c67)
+    setvar wrong_target = 'qualification'
+    ;;
   *) echo 'expected actual qualification or c67 target' >&2; exit 2 ;;
 esac
 for path in "$root" "$apk" "$output" "$grease" {

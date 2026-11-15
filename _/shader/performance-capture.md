@@ -17,9 +17,12 @@ does not qualify live motion or interaction performance.
 The native sampler retains at most 1,800 frame attempts in heap memory. It records
 scene preparation/divisor reduction, uniform uploads, GL submission and
 `eglSwapBuffers` CPU wall durations, followed by the monotonic timestamp after
-the swap call returns. Collection performs no receipt I/O or logging. After the
-last attempt, it writes `holo-performance.tsv` in the activity's
-`internalDataPath`, then reports that exact path and its summary in logcat.
+the swap call returns. Before collection, it creates a unique
+`holo-performance-XXXXXX` directory beneath the activity's `internalDataPath`;
+the READY record announces its exact `frames.tsv` path. Collection performs no
+receipt I/O or logging. After the last attempt, it writes that unique TSV, then
+reports its exact path and summary in logcat. Application commit, selected
+fragment SHA-256, overlay mode and frozen-pose flag are recorded in the receipt.
 
 The TSV retains every attempt and its validity flags. Failed swaps remain rows;
 they do not replace the previous successful-swap timestamp. The first successful
@@ -32,8 +35,11 @@ A successful swap return is a CPU-side boundary. These intervals do not establis
 GPU execution time or the actual panel presentation timestamp. Record device,
 renderer, source, shader and APK identity separately with the raw receipt.
 
-Final app-thread cleanup writes any interrupted capture with
-`collection_status=INCOMPLETE`. Focus changes and window recreation should keep
+Final app-thread cleanup writes an interrupted capture that has at least one row
+with `collection_status=INCOMPLETE`. A capture stopped before its first attempt
+has no receipt at its announced unique path. Earlier COMPLETE receipts remain
+in different capture directories and cannot substitute for that missing result.
+Focus changes and window recreation should keep
 the sampler alive; a background pause remains visible in the next successful
 interval. Retrieve the exact TSV through the installed development package's
 authorized app-data channel. No physical C67 result is asserted by this document.
