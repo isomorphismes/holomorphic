@@ -1,9 +1,11 @@
+#define _POSIX_C_SOURCE 200809L
 #include "holomorphic_walk.h"
 
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 #define SEARCH_CANDIDATES 128
 #define DISTURBANCE_SAMPLE_COUNT 19
@@ -14,6 +16,10 @@ struct walk_worker {
     uint64_t result_generation;
     float direction[HOLOMORPHIC_WALK_COEFFICIENT_COUNT][2];
     float score;
+    uint64_t search_count;
+    uint64_t measured_count;
+    uint64_t invalid_count;
+    double search_cpu_ms;
 };
 
 struct walk_state {
@@ -284,9 +290,24 @@ static void *worker_main(void *argument) {
 
         float direction[HOLOMORPHIC_WALK_COEFFICIENT_COUNT][2];
         float score;
+        struct timespec cpu_begin, cpu_end;
+        bool begun = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_begin) == 0;
         search_direction(coefficients, heading, direction, &score, &random_state);
+        bool ended = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end) == 0;
+        double cpu_ms = 0.0;
+        if (begun && ended) {
+            cpu_ms = (double)(cpu_end.tv_sec - cpu_begin.tv_sec) * 1000.0 +
+                     (double)(cpu_end.tv_nsec - cpu_begin.tv_nsec) * 1.0e-6;
+        }
 
         pthread_mutex_lock(&walk.mutex);
+        ++worker->search_count;
+        if (begun && ended && cpu_ms >= 0.0) {
+            ++worker->measured_count;
+            worker->search_cpu_ms += cpu_ms;
+        } else {
+            ++worker->invalid_count;
+        }
         if (!walk.stop && generation >= worker->result_generation && isfinite(score)) {
             worker->result_generation = generation;
             worker->score = score;
@@ -310,6 +331,10 @@ bool holomorphic_walk_start(void) {
         walk.workers[index].index = index;
         walk.workers[index].result_generation = 0;
         walk.workers[index].score = INFINITY;
+        walk.workers[index].search_count = 0;
+        walk.workers[index].measured_count = 0;
+        walk.workers[index].invalid_count = 0;
+        walk.workers[index].search_cpu_ms = 0.0;
     }
     walk.running = true;
     pthread_mutex_unlock(&walk.mutex);
@@ -396,4 +421,22 @@ bool holomorphic_walk_best_direction(
         *score = best_score;
     }
     return found;
+}
+
+void holomorphic_walk_take_cpu_performance(struct holomorphic_walk_cpu_performance *result) {
+    if (result == NULL) return;
+    memset(result, 0, sizeof(*result));
+    pthread_mutex_lock(&walk.mutex);
+    for (int i = 0; i < HOLOMORPHIC_WALK_WORKER_COUNT; ++i) {
+        struct walk_worker *worker = &walk.workers[i];
+        result->searches += worker->search_count;
+        result->measured += worker->measured_count;
+        result->invalid += worker->invalid_count;
+        result->cpu_thread_ms += worker->search_cpu_ms;
+        worker->search_count = 0;
+        worker->measured_count = 0;
+        worker->invalid_count = 0;
+        worker->search_cpu_ms = 0.0;
+    }
+    pthread_mutex_unlock(&walk.mutex);
 }

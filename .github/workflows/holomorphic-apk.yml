@@ -14,17 +14,24 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: holomorphic-apk-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  generated-fragment:
+    uses: isomorphisms/flexible-pipes/.github/workflows/holomorphic-gpu-repair-01.yml@2a8b9befe29463b3fc5d00ef9e11145bbaed05d5
+    with:
+      control-head: 2a8b9befe29463b3fc5d00ef9e11145bbaed05d5
+      application-head: ${{ github.event.pull_request.head.sha || github.sha }}
+
   compilers:
     uses: ./.github/workflows/ick-compilers.yml
 
   build:
-    needs: compilers
+    needs: [compilers, generated-fragment]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -40,7 +47,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: isomorphisms/ai-ci
-          ref: 903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
+          ref: 66eba2c0e02276386ed9d736614348fd3416d48a
           path: _/ai-ci-ick
 
       - name: Download qualified compiler stages
@@ -96,9 +103,21 @@ jobs:
         run: |
           make -f _/ick/Makefile test ICK="${{ steps.ick.outputs.compiler }}"
 
+      - name: Consume FP / Kitchen / Ike checked Idriç fragment
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: checked-idris-holomorphic-fragment
+          path: _/shader/generated
+
       - name: Build holomorphic-random APK
         working-directory: android
+        env:
+          HOLOMORPHIC_GENERATED_FRAGMENT: ${{ github.workspace }}/_/shader/generated/continuation.frag
         run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Reject packaged shader/provenance drift
+        run: |
+          python3 _/shader/verify-packaged-fragment.py android/app/build/outputs/apk/debug/app-debug.apk _/shader/generated/continuation.frag _/shader/generated/continuation.provenance
 
       - name: Verify declared source producers
         uses: isomorphisms/ai-ci@903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8
@@ -124,6 +143,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Restore qualified canonical Grease
+        uses: ./_/ci/grease
+
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
@@ -159,10 +186,7 @@ jobs:
             adb install -r artifacts/app-debug.apk
             adb install -r artifacts/app-debug.apk
             adb shell settings put secure immersive_mode_confirmations confirmed
-            adb logcat -c
-            adb shell am start -W -n org.isomorphisms.analyticcontinuation.lasso.dev/org.isomorphisms.analyticcontinuation.ExplorerActivity
-            sleep 4
-            adb logcat -d > holomorphic-emulator.log
+            env ASAN_OPTIONS=detect_leaks=0 timeout 80s "$GITHUB_WORKSPACE/grease/bin/grease" "$GITHUB_WORKSPACE/_/shader/wait-first-frame.grease" "holomorphic-emulator.log" "holomorphic-emulator.png"
             grep -Fq 'holomorphic field started with 3 workers' holomorphic-emulator.log
             grep -Fq 'holomorphic field ready:' holomorphic-emulator.log
             grep -Fq 'zeros=1 poles=1' holomorphic-emulator.log
@@ -192,6 +216,7 @@ jobs:
           name: analytic-continuation-holomorphic-emulator-evidence
           path: |
             holomorphic-emulator.log
+            holomorphic-emulator.log.startup-stream
             holomorphic-emulator.png
             holomorphic-motion-a.png
             holomorphic-motion-b.png

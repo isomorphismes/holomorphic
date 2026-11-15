@@ -1,0 +1,65 @@
+#!/usr/bin/env grease
+# Strict Grease control-flow tests with explicit synthetic gh/curl transports.
+# No real APK, GPU output, network acquisition, or GitHub mutation is tested.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 2
+var root = ARGV[0]
+var grease = ARGV[1]
+var tab = $(printf '\t')
+test -x "$grease"
+var base = "$root/_/build/qualification-publication-contract"
+test -s "$base/identity-fixture.tsv"
+var output = $(mktemp -d "$root/_/build/qualification-publication-flow.XXXXXX")
+var artifact = "$base/artifact"
+var emulator = "$base/emulator"
+var source = '1111111111111111111111111111111111111111'
+var backend = '2222222222222222222222222222222222222222'
+cp "$base/apk-fixture" "$artifact/android/app/build/outputs/apk/debug/app-debug.apk"
+cp "$base/identity-fixture.tsv" "$artifact/_/build/qualification-apk/producer-identity.tsv"
+cp "$base/acceptance-fixture.log" "$emulator/generated-holomorphic-independent-acceptance.log"
+cp "$base/raw-fixture.log" "$emulator/generated-holomorphic-emulator.log"
+var digest = $(sha256sum "$base/apk-fixture" | cut -d ' ' -f 1)
+var tag = "qualification-holomorphic-$source-$digest"
+mkdir -p "$output/bin"
+for tool in gh curl {
+  printf '#!%s\n' "$grease" > "$output/bin/$tool"
+  cat "$root/_/shader/fixtures/qualification-publication-transport.grease" >> "$output/bin/$tool"
+  chmod 755 "$output/bin/$tool"
+}
+for scenario in created existing existing-assets {
+  var state = "$output/$scenario-state"
+  var publication = "$output/$scenario-publication"
+  mkdir -p "$state/assets"
+  printf '%s\n' "$scenario" > "$state/scenario"
+  printf 'true\n' > "$state/draft"
+  touch "$state/assets.tsv" "$state/calls.tsv"
+  if (scenario === 'created') { touch "$state/fail-first-metadata" }
+  if (scenario !== 'created') { touch "$state/exists" }
+  if (scenario === 'existing-assets') {
+    cp -a "$output/created-state/assets/." "$state/assets/"
+    cp "$output/created-state/assets.tsv" "$state/assets.tsv"
+  }
+  env PATH="$output/bin:$[ENV.PATH]" GH_TOKEN=synthetic-test-token \
+    GITHUB_REPOSITORY=isomorphismes/holomorphic GITHUB_RUN_ID=424242 \
+    HOLOMORPHIC_EMULATOR_ACCEPTED=success HOLO_TEST_STATE="$state" \
+    HOLO_TEST_TAG="$tag" HOLO_TEST_SOURCE="$source" \
+    "$grease" "$root/_/shader/publish-qualification-apk.grease" \
+    "$artifact" "$emulator" "$source" "$backend" "$publication" > "$output/$scenario.log" 2>&1
+  test -s "$publication/publication.tsv"
+  test "$(cat "$state/draft")" = false
+  test "$(wc -l < "$state/assets.tsv" | tr -d '[:space:]')" -eq 2
+  test "$(grep -c 'releases?per_page=100' "$state/calls.tsv")" -eq 1
+  grep -Fq 'PATCH' "$state/calls.tsv"
+  if (scenario === 'created') {
+    test -s "$publication/release-created-id.txt"
+    grep -Fq 'synthetic transient metadata 404' "$publication/release-metadata-0.stderr"
+    test -s "$publication/release-metadata-1.tsv"
+  } else {
+    test ! -e "$publication/release-created-id.txt"
+    if grep -Fq 'POST' "$state/calls.tsv" { echo 'existing draft was recreated' >&2; exit 1 }
+  }
+  if (scenario === 'existing-assets') {
+    if grep -Fq "release${tab}upload" "$state/calls.tsv" { echo 'existing asset was re-uploaded' >&2; exit 1 }
+  }
+}
+printf '\033[32mPASS\033[0m strict Grease synthetic created/stale-list, existing-draft, and existing-assets publication flows; real GitHub/APK/GPU/publication NOT_RUN\n'

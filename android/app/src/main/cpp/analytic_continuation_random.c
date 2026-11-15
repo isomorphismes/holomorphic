@@ -1,4 +1,5 @@
 #include <android/asset_manager.h>
+#include <android/choreographer.h>
 #include <android/input.h>
 #include <android/log.h>
 #include <android/native_activity.h>
@@ -8,6 +9,7 @@
 #include <GLES3/gl3.h>
 
 #include <math.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,10 +17,16 @@
 #include <time.h>
 
 #include "holomorphic_walk.h"
+#include "holomorphic_divisor.h"
+#include "holomorphic_shader_binding.h"
+#include "runtime_source_binding.h"
+#include "holo_gpu_timer.h"
 
 #define LOG_TAG "AnalyticContinuation"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+#include "holo_frame_samples.h"
 
 #define MAX_FACTORS 32
 
@@ -60,14 +68,20 @@ struct engine {
     GLint pole_count_location;
     GLint zero_positions_location;
     GLint pole_positions_location;
+    GLint remote_pole_positions_location;
     GLint holomorphic_coefficients_location;
+    GLint divisor_count_location;
+    GLint divisor_factors_location;
     GLint remote_pole_time_location;
+    GLint numeric_output_location;
+    GLint numeric_point_location;
     GLint zoom_location;
     GLint placement_kind_location;
 
     float zero_positions[MAX_FACTORS][2];
     int zero_count;
     float pole_positions[MAX_FACTORS][2];
+    float remote_pole_positions[HOLOMORPHIC_REMOTE_POLE_COUNT][2];
     int pole_count;
     enum placement_kind placement_kind;
 
@@ -81,6 +95,14 @@ struct engine {
     bool deformation_workers_started;
     bool deformation_direction_ready;
     bool focused;
+    AChoreographer *choreographer;
+    bool frame_callback_pending;
+    bool frame_ready;
+    uint64_t pacing_callbacks;
+    uint64_t pacing_ticks;
+    uint64_t pacing_wait_samples;
+    double pacing_wait_wall_ms;
+    double pacing_wait_max_wall_ms;
 
     float zoom;
     float pinch_start_distance;
@@ -97,12 +119,34 @@ struct engine {
 
     bool dirty;
     bool logged_first_frame;
+    bool numeric_probe_attempted;
+    bool qualification_requested;
+    bool performance_reference_fullscreen;
+    bool performance_frozen_pose;
+    struct holo_frame_samples performance_samples;
+    struct holo_gpu_timer gpu_timer;
+    uint64_t timing_frames;
+    double timing_submission_cpu_ms;
+    double timing_presentation_cpu_ms;
+    double timing_window_start;
 };
 
 static double monotonic_seconds(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (double)now.tv_sec + 1.0e-9 * (double)now.tv_nsec;
+}
+
+/* The callback runs on this app thread's looper. A single outstanding request
+ * supplies display cadence without an additional fixed delay before swapping.
+ * The legacy callback's long timestamp is deliberately unused: it may wrap on
+ * a 32-bit ABI, and CPU callback arrival is not a GPU/presentation timestamp. */
+static void display_frame_callback(long frame_time_nanos, void *data) {
+    (void)frame_time_nanos;
+    struct engine *engine = data;
+    engine->frame_callback_pending = false;
+    engine->frame_ready = true;
+    ++engine->pacing_callbacks;
 }
 
 static void initialize_state(struct engine *engine) {
@@ -125,6 +169,14 @@ static void initialize_state(struct engine *engine) {
     engine->deformation_workers_started = false;
     engine->deformation_direction_ready = false;
     engine->focused = false;
+    engine->choreographer = NULL;
+    engine->frame_callback_pending = false;
+    engine->frame_ready = false;
+    engine->pacing_callbacks = 0;
+    engine->pacing_ticks = 0;
+    engine->pacing_wait_samples = 0;
+    engine->pacing_wait_wall_ms = 0.0;
+    engine->pacing_wait_max_wall_ms = 0.0;
 
     engine->zoom = 1.0f;
     engine->pinch_start_distance = 0.0f;
@@ -137,9 +189,14 @@ static void initialize_state(struct engine *engine) {
     engine->dragging_factor = false;
     engine->moved = false;
     engine->dirty = true;
+    engine->numeric_probe_attempted = false;
+    engine->timing_frames = 0;
+    engine->timing_submission_cpu_ms = 0.0;
+    engine->timing_presentation_cpu_ms = 0.0;
+    engine->timing_window_start = 0.0;
 }
 
-static char *load_asset_text(AAssetManager *manager, const char *name) {
+static char *load_asset_text(AAssetManager *manager, const char *name, size_t *byte_length) {
     AAsset *asset = AAssetManager_open(manager, name, AASSET_MODE_BUFFER);
     if (asset == NULL) {
         LOGE("could not open asset %s", name);
@@ -147,6 +204,11 @@ static char *load_asset_text(AAssetManager *manager, const char *name) {
     }
 
     off64_t length = AAsset_getLength64(asset);
+    if (length <= 0 || (uint64_t)length >= (uint64_t)INT_MAX) {
+        AAsset_close(asset);
+        LOGE("invalid text asset length for %s", name);
+        return NULL;
+    }
     char *text = malloc((size_t)length + 1u);
     if (text == NULL) {
         AAsset_close(asset);
@@ -166,16 +228,71 @@ static char *load_asset_text(AAssetManager *manager, const char *name) {
     }
     text[length] = '\0';
     AAsset_close(asset);
+    if (holo_source_contains_nul(text, (size_t)length)) {
+        LOGE("embedded NUL in text asset %s", name);
+        free(text);
+        return NULL;
+    }
+    if (byte_length != NULL) *byte_length = (size_t)length;
     return text;
 }
 
-static GLuint compile_shader(GLenum type, const char *source) {
+static GLuint compile_shader(GLenum type, const char *source, size_t byte_length, const char *receipt) {
+    char submitted_sha256[65] = {0};
+    if (type == GL_FRAGMENT_SHADER && HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
+        const struct holo_source_binding expected = {
+            HOLOMORPHIC_FRAGMENT_LENGTH, HOLOMORPHIC_FRAGMENT_SHA256,
+            HOLOMORPHIC_BACKEND_COMMIT, HOLOMORPHIC_APPLICATION_COMMIT
+        };
+        const char *failure = holo_verify_source_binding(
+            source, byte_length, receipt, &expected, submitted_sha256
+        );
+        if (failure != NULL) {
+            LOGE("holomorphic field shader provenance rejected: %s fallback=none", failure);
+            return 0;
+        }
+    } else if (type == GL_FRAGMENT_SHADER && receipt != NULL) {
+        LOGE("holomorphic field shader provenance rejected: generated-receipt-in-legacy-mode fallback=none");
+        return 0;
+    }
+    if (byte_length == 0 || byte_length > INT_MAX) return 0;
     GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &source, NULL);
+    const GLint source_length = (GLint)byte_length;
+    glShaderSource(shader, 1, &source, &source_length);
+    if (type == GL_FRAGMENT_SHADER && HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
+        /* Read the selected object's source back from GL before compilation.
+         * The receipt describes the actual submission and driver's retained
+         * bytes, not merely an asset or a neighbouring provenance sidecar. */
+        GLint stored_length = 0;
+        glGetShaderiv(shader, GL_SHADER_SOURCE_LENGTH, &stored_length);
+        char *stored = stored_length > 0 ? malloc((size_t)stored_length) : NULL;
+        GLsizei retrieved_length = 0;
+        if (stored != NULL) glGetShaderSource(shader, stored_length, &retrieved_length, stored);
+        char driver_sha256[65] = {0};
+        if (stored != NULL && retrieved_length >= 0)
+            holo_source_sha256(stored, (size_t)retrieved_length, driver_sha256);
+        free(stored);
+        if ((size_t)retrieved_length != byte_length || strcmp(driver_sha256, submitted_sha256) != 0) {
+            LOGE("holomorphic field shader provenance rejected: driver-source-mismatch fallback=none");
+            glDeleteShader(shader);
+            return 0;
+        }
+        LOGI(
+            "holomorphic field shader bytes verified: mode=checked-idris compiler=idris2-glsles "
+            "backend_commit=%s application_commit=%s fragment_sha256=%s bytes=%zu "
+            "submission=glShaderSource fallback=none driver_readback_sha256=%s",
+            HOLOMORPHIC_BACKEND_COMMIT, HOLOMORPHIC_APPLICATION_COMMIT,
+            submitted_sha256, byte_length, driver_sha256
+        );
+    }
+    double compile_start = monotonic_seconds();
     glCompileShader(shader);
 
     GLint compiled = GL_FALSE;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    LOGI("HOLO_SHADER_COMPILE stage=%s status=%s cpu_wall_ms=%.9g gpu_time=NOT_RUN",
+        type == GL_FRAGMENT_SHADER ? "fragment" : "vertex",
+        compiled == GL_TRUE ? "PASS" : "FAIL", (monotonic_seconds() - compile_start) * 1000.0);
     if (compiled == GL_TRUE) {
         return shader;
     }
@@ -198,10 +315,13 @@ static GLuint link_program(GLuint vertex_shader, GLuint fragment_shader) {
     GLuint program = glCreateProgram();
     glAttachShader(program, vertex_shader);
     glAttachShader(program, fragment_shader);
+    double link_start = monotonic_seconds();
     glLinkProgram(program);
 
     GLint linked = GL_FALSE;
     glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    LOGI("HOLO_SHADER_LINK status=%s cpu_wall_ms=%.9g gpu_time=NOT_RUN",
+        linked == GL_TRUE ? "PASS" : "FAIL", (monotonic_seconds() - link_start) * 1000.0);
     if (linked == GL_TRUE) {
         return program;
     }
@@ -227,16 +347,39 @@ static bool create_renderer(struct engine *engine) {
         -1.0f,  3.0f
     };
 
+    GLint uniform_vectors = 0;
+    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &uniform_vectors);
+    LOGI("holomorphic field shader capacity: fragment_uniform_vectors=%d required_generated=197", uniform_vectors);
+    if (HOLOMORPHIC_REQUIRE_GENERATED_SHADER && uniform_vectors < 197) {
+        LOGE("holomorphic field shader rejected: insufficient-fragment-uniforms fallback=none");
+        return false;
+    }
+    size_t fragment_length = 0;
     char *fragment_source = load_asset_text(
-        engine->app->activity->assetManager, "continuation.frag"
+        engine->app->activity->assetManager, "continuation.frag", &fragment_length
     );
     if (fragment_source == NULL) {
         return false;
     }
 
-    GLuint vertex_shader = compile_shader(GL_VERTEX_SHADER, VERTEX_SHADER);
-    GLuint fragment_shader = compile_shader(GL_FRAGMENT_SHADER, fragment_source);
+    AAsset *receipt_asset = AAssetManager_open(
+        engine->app->activity->assetManager, "continuation.provenance", AASSET_MODE_BUFFER
+    );
+    char *fragment_receipt = NULL;
+    if (receipt_asset != NULL) {
+        AAsset_close(receipt_asset);
+        fragment_receipt = load_asset_text(
+            engine->app->activity->assetManager, "continuation.provenance", NULL
+        );
+        if (fragment_receipt == NULL) {
+            free(fragment_source);
+            return false;
+        }
+    }
+    GLuint vertex_shader = compile_shader(GL_VERTEX_SHADER, VERTEX_SHADER, strlen(VERTEX_SHADER), NULL);
+    GLuint fragment_shader = compile_shader(GL_FRAGMENT_SHADER, fragment_source, fragment_length, fragment_receipt);
     free(fragment_source);
+    free(fragment_receipt);
     if (vertex_shader == 0 || fragment_shader == 0) {
         if (vertex_shader != 0) glDeleteShader(vertex_shader);
         if (fragment_shader != 0) glDeleteShader(fragment_shader);
@@ -255,12 +398,15 @@ static bool create_renderer(struct engine *engine) {
     engine->pole_count_location = glGetUniformLocation(engine->program, "u_pole_count");
     engine->zero_positions_location = glGetUniformLocation(engine->program, "u_zero_positions[0]");
     engine->pole_positions_location = glGetUniformLocation(engine->program, "u_pole_positions[0]");
+    engine->remote_pole_positions_location = glGetUniformLocation(engine->program, "u_remote_pole_positions[0]");
     engine->holomorphic_coefficients_location = glGetUniformLocation(
         engine->program, "u_holomorphic_coefficients[0]"
     );
-    engine->remote_pole_time_location = glGetUniformLocation(
-        engine->program, "u_remote_pole_time"
-    );
+    engine->divisor_count_location = glGetUniformLocation(engine->program, "u_divisor_count");
+    engine->divisor_factors_location = glGetUniformLocation(engine->program, "u_divisor_factors[0]");
+    engine->remote_pole_time_location = glGetUniformLocation(engine->program, "u_remote_pole_time");
+    engine->numeric_output_location = glGetUniformLocation(engine->program, "u_numeric_output");
+    engine->numeric_point_location = glGetUniformLocation(engine->program, "u_numeric_point");
     engine->zoom_location = glGetUniformLocation(engine->program, "u_zoom");
     engine->placement_kind_location = glGetUniformLocation(engine->program, "u_placement_kind");
 
@@ -269,11 +415,22 @@ static bool create_renderer(struct engine *engine) {
         engine->pole_count_location < 0 || engine->zero_positions_location < 0 ||
         engine->pole_positions_location < 0 ||
         engine->holomorphic_coefficients_location < 0 ||
-        engine->remote_pole_time_location < 0 ||
+        (HOLOMORPHIC_REQUIRE_GENERATED_SHADER &&
+            (engine->divisor_count_location < 0 || engine->divisor_factors_location < 0 ||
+             engine->remote_pole_positions_location < 0 ||
+             engine->numeric_output_location < 0 || engine->numeric_point_location < 0)) ||
+        (!HOLOMORPHIC_REQUIRE_GENERATED_SHADER && engine->remote_pole_time_location < 0) ||
         engine->zoom_location < 0 || engine->placement_kind_location < 0
     ) {
         LOGE("holomorphic field shader uniforms unavailable");
         return false;
+    }
+
+    if (HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
+        LOGI("holomorphic field GLSL backend selected: compiler=idris2-glsles fallback=none fragment_sha256=%s",
+             HOLOMORPHIC_FRAGMENT_SHA256);
+    } else {
+        LOGI("holomorphic field GLSL backend selected: legacy-handwritten");
     }
 
     glGenVertexArrays(1, &engine->vao);
@@ -292,8 +449,8 @@ static bool create_renderer(struct engine *engine) {
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     LOGI(
-        "holomorphic field renderer ready: GL_VERSION=%s GL_RENDERER=%s",
-        glGetString(GL_VERSION), glGetString(GL_RENDERER)
+        "holomorphic field renderer ready: GL_VERSION=%s GL_RENDERER=%s GL_VENDOR=%s",
+        glGetString(GL_VERSION), glGetString(GL_RENDERER), glGetString(GL_VENDOR)
     );
     return true;
 }
@@ -373,6 +530,9 @@ static bool initialize_display(struct engine *engine) {
         return false;
     }
 
+    holo_gpu_timer_init(&engine->gpu_timer, HOLOMORPHIC_REQUIRE_GENERATED_SHADER);
+    LOGI("HOLO_GPU_TIMER status=%s reason=%s extension=EXT_disjoint_timer_query",
+        engine->gpu_timer.enabled ? "AVAILABLE" : "NOT_RUN", engine->gpu_timer.reason);
     glViewport(0, 0, engine->width, engine->height);
     engine->dirty = true;
     LOGI(
@@ -387,6 +547,7 @@ static void terminate_display(struct engine *engine) {
         return;
     }
 
+    holo_gpu_timer_shutdown(&engine->gpu_timer);
     if (engine->vbo != 0) {
         glDeleteBuffers(1, &engine->vbo);
         engine->vbo = 0;
@@ -427,6 +588,393 @@ static float view_pixel_radius(const struct engine *engine) {
     return 0.42f * fminf((float)engine->width, (float)engine->height) * engine->zoom;
 }
 
+/* Separate large-q domain diagnostic. These rows never replace or relax the
+ * ordinary 34 mandatory produced=1 samples. The displaced pair must reject raw
+ * output when adding its small contribution to q erases it in binary32. Mode 3
+ * exposes the actual pre-Wegert measure used by mode 2 in this same program. */
+static void run_large_q_probes(
+    struct engine *engine, GLuint texture, GLuint color_texture
+) {
+    static const float coefficients[5][2] = {
+        {3.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f},
+        {0.0f, 0.0f}, {0.0f, 0.0f}
+    };
+    static const char *case_names[] = {"baseline", "pair"};
+    int raw_samples = 0, precolor_samples = 0, color_samples = 0;
+    bool valid = true;
+    glUniform2fv(engine->holomorphic_coefficients_location, 5, &coefficients[0][0]);
+    glUniform2f(engine->numeric_point_location, 1000.0f, 1000.0f);
+    glUniform1f(engine->zoom_location, 1.0f);
+    for (int case_index = 0; case_index < 2; ++case_index) {
+        const char *name = case_names[case_index];
+        float zeros[32][2] = {{0}}, poles[32][2] = {{0}};
+        float remotes[HOLOMORPHIC_REMOTE_POLE_COUNT][2] = {{0}};
+        int count = case_index;
+        poles[0][0] = 0.04f;
+        struct holomorphic_divisor divisor;
+        if (!holomorphic_divisor_reduce_positions(
+                &divisor, count, zeros, count, poles, 0, remotes)) {
+            valid = false;
+            break;
+        }
+        LOGI("HOLO_GPU_LARGE_Q_CASE case=%s point_x=1000 point_y=1000 coefficient_count=5 zero_count=%d pole_count=%d remote_count=0 factor_count=%d time=0 zoom=1",
+            name, count, count, divisor.count);
+        for (int index = 0; index < 5; ++index)
+            LOGI("HOLO_GPU_LARGE_Q_COEFFICIENT case=%s index=%d real=%.9g imag=%.9g",
+                name, index, coefficients[index][0], coefficients[index][1]);
+        for (int index = 0; index < count; ++index) {
+            LOGI("HOLO_GPU_LARGE_Q_INPUT case=%s kind=zero index=%d x=%.9g y=%.9g",
+                name, index, zeros[index][0], zeros[index][1]);
+            LOGI("HOLO_GPU_LARGE_Q_INPUT case=%s kind=pole index=%d x=%.9g y=%.9g",
+                name, index, poles[index][0], poles[index][1]);
+        }
+        for (int index = 0; index < divisor.count; ++index)
+            LOGI("HOLO_GPU_LARGE_Q_FACTOR case=%s index=%d x=%.9g y=%.9g order=%.9g",
+                name, index, divisor.factors[index][0],
+                divisor.factors[index][1], divisor.factors[index][2]);
+        glUniform1i(engine->zero_count_location, count);
+        glUniform1i(engine->pole_count_location, count);
+        glUniform2fv(engine->zero_positions_location, 32, &zeros[0][0]);
+        glUniform2fv(engine->pole_positions_location, 32, &poles[0][0]);
+        glUniform2fv(engine->remote_pole_positions_location,
+            HOLOMORPHIC_REMOTE_POLE_COUNT, &remotes[0][0]);
+        glUniform1i(engine->divisor_count_location, divisor.count);
+        glUniform3fv(engine->divisor_factors_location, divisor.count, &divisor.factors[0][0]);
+
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        GLenum float_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        const GLfloat missing[4] = {NAN, NAN, -12345.0f, -12345.0f};
+        for (int mode_index = 0; mode_index < 2; ++mode_index) {
+            int mode = mode_index == 0 ? 1 : 3;
+            glUniform1i(engine->numeric_output_location, mode);
+            glClearBufferfv(GL_COLOR, 0, missing);
+            double start = monotonic_seconds();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            GLfloat result[4] = {NAN, NAN, -12345.0f, -12345.0f};
+            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, result);
+            GLenum error = glGetError();
+            double readback_cpu_ms = (monotonic_seconds() - start) * 1000.0;
+            float expected_marker = mode == 1 && case_index == 1 ? 0.0f : 1.0f;
+            bool sample_valid = float_status == GL_FRAMEBUFFER_COMPLETE && error == GL_NO_ERROR &&
+                isfinite(result[0]) && isfinite(result[1]) && result[2] == 0.0f &&
+                result[3] == expected_marker;
+            if (mode == 1) {
+                /* This is an execution/domain guard, not the numerical oracle.
+                 * AICI independently checks the actual q and retained delta. */
+                sample_valid = sample_valid && fabsf(result[0] - 1000.0f) < 1.0f &&
+                    fabsf(result[1] - 1000.0f) < 1.0f;
+                LOGI("HOLO_GPU_LARGE_Q_RAW case=%s output_mode=1 phase=%.9g log_modulus=%.9g singular_order=%.9g produced=%.9g gl_error=%u framebuffer_status=%u framebuffer_format=RGBA32F conversion=glReadPixels readback_cpu_ms=%.9g",
+                    name, result[0], result[1], result[2], result[3],
+                    (unsigned int)error, (unsigned int)float_status, readback_cpu_ms);
+                if (sample_valid) ++raw_samples;
+            } else {
+                LOGI("HOLO_GPU_LARGE_Q_PRECOLOR case=%s output_mode=3 phase=%.9g log_modulus=%.9g singular_order=%.9g produced=%.9g gl_error=%u framebuffer_status=%u framebuffer_format=RGBA32F conversion=glReadPixels readback_cpu_ms=%.9g",
+                    name, result[0], result[1], result[2], result[3],
+                    (unsigned int)error, (unsigned int)float_status, readback_cpu_ms);
+                if (sample_valid) ++precolor_samples;
+            }
+            valid = valid && sample_valid;
+        }
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_texture, 0);
+        GLenum color_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glUniform1i(engine->numeric_output_location, 2);
+        const GLfloat missing_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        glClearBufferfv(GL_COLOR, 0, missing_color);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        GLubyte color[4] = {0, 0, 0, 0};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, color);
+        GLenum color_error = glGetError();
+        bool color_valid = color_status == GL_FRAMEBUFFER_COMPLETE &&
+            color_error == GL_NO_ERROR && color[3] == 255;
+        LOGI("HOLO_GPU_LARGE_Q_COLOR case=%s output_mode=2 red=%u green=%u blue=%u alpha=%u produced=%d gl_error=%u framebuffer_status=%u framebuffer_format=RGBA8 conversion=glReadPixels dither=disabled",
+            name, color[0], color[1], color[2], color[3], color_valid ? 1 : 0,
+            (unsigned int)color_error, (unsigned int)color_status);
+        if (color_valid) ++color_samples;
+        valid = valid && color_valid;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glUniform1i(engine->numeric_output_location, 1);
+    LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=%s raw_samples=%d precolor_samples=%d color_samples=%d expected_cases=2 raw_pair_domain=RANGE_REJECTED_UNQUALIFIED reference_acceptance=NOT_RUN",
+        valid && raw_samples == 2 && precolor_samples == 2 && color_samples == 2 ? "OUTPUT_READY" : "FAIL",
+        raw_samples, precolor_samples, color_samples);
+}
+
+/* Use the same selected live program and divisor upload path. RGB screenshots
+ * are never decoded as numbers. Unsupported float attachments remain NOT_RUN.
+ * Independent AICI owns the binary64 expected values and tolerances. */
+static void run_numeric_probes(struct engine *engine) {
+    if (!HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
+        LOGI("HOLO_GPU_NUMERIC status=NOT_RUN reason=legacy-mode");
+        LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=NOT_RUN reason=legacy-mode");
+        return;
+    }
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    if (extensions == NULL || strstr(extensions, "GL_EXT_color_buffer_float") == NULL) {
+        LOGI("HOLO_GPU_NUMERIC status=NOT_RUN reason=unsupported-float-color-buffer");
+        LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=NOT_RUN reason=unsupported-float-color-buffer");
+        return;
+    }
+    GLint previous_framebuffer = 0, viewport[4] = {0};
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer);
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    GLuint framebuffer = 0, texture = 0, color_texture = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1, 1, 0, GL_RGBA, GL_FLOAT, NULL);
+    glGenTextures(1, &color_texture);
+    glBindTexture(GL_TEXTURE_2D, color_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        LOGI("HOLO_GPU_NUMERIC status=NOT_RUN reason=incomplete-float-framebuffer");
+        LOGI("HOLO_GPU_LARGE_Q_OUTPUT status=NOT_RUN reason=incomplete-float-framebuffer");
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous_framebuffer);
+        glDeleteFramebuffers(1, &framebuffer);
+        glDeleteTextures(1, &texture);
+        glDeleteTextures(1, &color_texture);
+        return;
+    }
+    static const float coefficients[5][2] = {
+        {0.125f,-0.0625f}, {-0.03125f,0.015625f}, {0.0078125f,0.00390625f},
+        {-0.001953125f,0.0009765625f}, {0.00048828125f,-0.000244140625f}
+    };
+    static const float points[4][2] = {
+        {0.125f,0.1875f}, {0.25f,-0.375f}, {-0.75f,-0.5f}, {0.3125f,-0.40625f}
+    };
+    static const char *case_names[] = {
+        "one_exact", "one_displaced", "24_exact", "24_displaced", "multiplicity",
+        "moving0", "moving7_5", "moving7_5_zoom", "24_displaced_large", "24_displaced_small"
+    };
+    GLboolean previous_dither = glIsEnabled(GL_DITHER);
+    glDisable(GL_DITHER);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(engine->program);
+    glBindVertexArray(engine->vao);
+    glUniform1i(engine->numeric_output_location, 1);
+    glUniform2f(engine->resolution_location, 1.0f, 1.0f);
+    glUniform2fv(engine->holomorphic_coefficients_location, 5, &coefficients[0][0]);
+    int produced_samples = 0;
+    int produced_color_samples = 0;
+    bool valid = true;
+    for (int case_index = 0; case_index < 10 && valid; ++case_index) {
+        float zeros[32][2] = {{0}}, poles[32][2] = {{0}};
+        int zero_count = 1, pole_count = 1, remote_count = 0;
+        double time = case_index == 6 || case_index == 7 ? 7.5 : 0.0;
+        zeros[0][0] = poles[0][0] = 0.25f;
+        zeros[0][1] = poles[0][1] = -0.375f;
+        if (case_index == 1) {
+            poles[0][0] += 0.0625f; poles[0][1] -= 0.03125f;
+        } else if (case_index == 2 || case_index == 3 || case_index >= 8) {
+            zero_count = pole_count = 24;
+            float scale = case_index == 8 ? 0x1p60f : 0x1p-60f;
+            for (int index = 0; index < 24; ++index) {
+                zeros[index][0] = case_index >= 8 ? scale * (1.0f + index * 0.0625f) : -0.75f + index * 0.0625f;
+                zeros[index][1] = case_index >= 8 ? scale * (-1.0f - index * 0.03125f) : -0.5f + index * 0.03125f;
+                poles[index][0] = zeros[index][0] + (case_index == 2 ? 0.0f : (case_index >= 8 ? scale : 1.0f) * 0.015625f);
+                poles[index][1] = zeros[index][1] - (case_index == 2 ? 0.0f : (case_index >= 8 ? scale : 1.0f) * 0.0078125f);
+            }
+        } else if (case_index == 4) {
+            zero_count = 3;
+            memcpy(zeros[1], zeros[0], sizeof(zeros[0]));
+            memcpy(zeros[2], zeros[0], sizeof(zeros[0]));
+        } else if (case_index == 5 || case_index == 6 || case_index == 7) {
+            zeros[0][0] = -0.34375f; zeros[0][1] = 0.0f;
+            poles[0][0] = 0.34375f; poles[0][1] = 0.0f;
+            remote_count = 24;
+        }
+        float remote_positions[HOLOMORPHIC_REMOTE_POLE_COUNT][2] = {{0}};
+        for (int index = 0; index < remote_count; ++index) {
+            if (!holomorphic_remote_pole(index, time, remote_positions[index])) valid = false;
+        }
+        struct holomorphic_divisor divisor;
+        if (!valid || !holomorphic_divisor_reduce_positions(
+                &divisor, zero_count, zeros, pole_count, poles, remote_count, remote_positions)) {
+            valid = false;
+            break;
+        }
+        LOGI("HOLO_GPU_CASE case=%s coefficient_count=5 zero_count=%d pole_count=%d remote_count=%d factor_count=%d time=%.9g",
+            case_names[case_index], zero_count, pole_count, remote_count, divisor.count, time);
+        for (int index = 0; index < 5; ++index)
+            LOGI("HOLO_GPU_COEFFICIENT case=%s index=%d real=%.9g imag=%.9g",
+                case_names[case_index], index, coefficients[index][0], coefficients[index][1]);
+        for (int index = 0; index < zero_count; ++index)
+            LOGI("HOLO_GPU_INPUT case=%s kind=zero index=%d x=%.9g y=%.9g",
+                case_names[case_index], index, zeros[index][0], zeros[index][1]);
+        for (int index = 0; index < pole_count; ++index)
+            LOGI("HOLO_GPU_INPUT case=%s kind=pole index=%d x=%.9g y=%.9g",
+                case_names[case_index], index, poles[index][0], poles[index][1]);
+        for (int index = 0; index < remote_count; ++index) {
+            LOGI("HOLO_GPU_INPUT case=%s kind=remote index=%d x=%.9g y=%.9g",
+                case_names[case_index], index, remote_positions[index][0], remote_positions[index][1]);
+        }
+        for (int index = 0; index < divisor.count; ++index)
+            LOGI("HOLO_GPU_FACTOR case=%s index=%d x=%.9g y=%.9g order=%.9g",
+                case_names[case_index], index, divisor.factors[index][0],
+                divisor.factors[index][1], divisor.factors[index][2]);
+        glUniform1i(engine->zero_count_location, zero_count);
+        glUniform1i(engine->pole_count_location, pole_count);
+        glUniform2fv(engine->zero_positions_location, 32, &zeros[0][0]);
+        glUniform2fv(engine->pole_positions_location, 32, &poles[0][0]);
+        glUniform2fv(engine->remote_pole_positions_location,
+            HOLOMORPHIC_REMOTE_POLE_COUNT, &remote_positions[0][0]);
+        glUniform1i(engine->divisor_count_location, divisor.count);
+        glUniform3fv(engine->divisor_factors_location, divisor.count, &divisor.factors[0][0]);
+        int sample_count = case_index >= 8 ? 1 : 4;
+        for (int sample = 0; sample < sample_count && valid; ++sample) {
+            float point_x = case_index >= 8 ? 0.0f : points[sample][0];
+            float point_y = case_index >= 8 ? 0.0f : points[sample][1];
+            float zoom = case_index == 7 ? 5.5f : sample == 0 ? 0.5f : sample == 1 ? 1.0f : 3.0f;
+            glUniform2f(engine->numeric_point_location, point_x, point_y);
+            glUniform1f(engine->zoom_location, zoom);
+            const GLfloat missing_sample[4] = {NAN, NAN, NAN, 0.0f};
+            glClearBufferfv(GL_COLOR, 0, missing_sample);
+            double start = monotonic_seconds();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            GLfloat result[4] = {NAN, NAN, NAN, 0.0f};
+            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, result);
+            GLenum error = glGetError();
+            double readback_cpu_ms = (monotonic_seconds() - start) * 1000.0;
+            valid = error == GL_NO_ERROR && isfinite(result[0]) && isfinite(result[1]) &&
+                isfinite(result[2]) && result[3] == 1.0f;
+            LOGI("HOLO_GPU_MEASURE case=%s sample=%d point_x=%.9g point_y=%.9g time=%.9g zoom=%.9g zero_count=%d pole_count=%d remote_count=%d phase=%.9g log_modulus=%.9g singular_order=%.9g produced=%.9g gl_error=%u readback_cpu_ms=%.9g",
+                case_names[case_index], sample, point_x, point_y, time, zoom,
+                zero_count, pole_count, remote_count, result[0], result[1], result[2], result[3],
+                (unsigned int)error, readback_cpu_ms);
+            if (valid) ++produced_samples;
+            if (valid) {
+                /* The second diagnostic mode is the canonical colour result
+                 * before overlays in the exact same selected fragment. The
+                 * colour bytes are read from an RGBA8 attachment, never a
+                 * separate shader or a reconstruction from the raw numbers. */
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_texture, 0);
+                glUniform1i(engine->numeric_output_location, 2);
+                const GLfloat empty_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                glClearBufferfv(GL_COLOR, 0, empty_color);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+                GLubyte color[4] = {0, 0, 0, 0};
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, color);
+                GLenum color_error = glGetError();
+                valid = color_error == GL_NO_ERROR && color[3] == 255;
+                LOGI("HOLO_GPU_COLOR case=%s sample=%d red=%u green=%u blue=%u alpha=%u produced=%d gl_error=%u output_mode=2 framebuffer_format=RGBA8 conversion=glReadPixels",
+                    case_names[case_index], sample, color[0], color[1], color[2], color[3],
+                    valid ? 1 : 0, (unsigned int)color_error);
+                if (valid) ++produced_color_samples;
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+                glUniform1i(engine->numeric_output_location, 1);
+            }
+        }
+    }
+    run_large_q_probes(engine, texture, color_texture);
+    glUniform1i(engine->numeric_output_location, 0);
+    if (previous_dither) glEnable(GL_DITHER);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous_framebuffer);
+    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &texture);
+    glDeleteTextures(1, &color_texture);
+    LOGI("HOLO_GPU_NUMERIC status=%s samples=%d expected=34 reference_acceptance=NOT_RUN",
+        valid && produced_samples == 34 ? "OUTPUT_READY" : "FAIL", produced_samples);
+    LOGI("HOLO_GPU_COLOR_OUTPUT status=%s samples=%d expected=34 reference_acceptance=NOT_RUN",
+        valid && produced_color_samples == 34 ? "OUTPUT_READY" : "FAIL", produced_color_samples);
+}
+
+/* Qualification is an explicit launch option, never startup work for a normal
+ * interactive launch. NativeActivity's app thread is not the Java UI thread. */
+static bool launch_boolean_extra(struct engine *engine, const char *extra_name) {
+    JavaVM *vm = engine->app->activity->vm;
+    JNIEnv *environment = NULL;
+    bool attached = false;
+    jint status = (*vm)->GetEnv(vm, (void **)&environment, JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if ((*vm)->AttachCurrentThread(vm, &environment, NULL) != JNI_OK) {
+            LOGE("HOLO_QUALIFICATION status=NOT_RUN reason=jni-attach");
+            return false;
+        }
+        attached = true;
+    } else if (status != JNI_OK) {
+        LOGE("HOLO_QUALIFICATION status=NOT_RUN reason=jni-environment");
+        return false;
+    }
+    bool requested = false;
+    jobject activity = engine->app->activity->clazz;
+    jclass activity_class = (*environment)->GetObjectClass(environment, activity);
+    jmethodID get_intent = activity_class == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->GetMethodID(environment, activity_class, "getIntent", "()Landroid/content/Intent;");
+    jobject intent = get_intent == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->CallObjectMethod(environment, activity, get_intent);
+    jclass intent_class = intent == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->GetObjectClass(environment, intent);
+    jmethodID get_boolean = intent_class == NULL || (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->GetMethodID(environment, intent_class, "getBooleanExtra", "(Ljava/lang/String;Z)Z");
+    jstring key = (*environment)->ExceptionCheck(environment) ? NULL :
+        (*environment)->NewStringUTF(environment, extra_name);
+    if (get_boolean != NULL && key != NULL && !(*environment)->ExceptionCheck(environment)) {
+        requested = (*environment)->CallBooleanMethod(environment, intent, get_boolean, key, JNI_FALSE) == JNI_TRUE;
+    }
+    if ((*environment)->ExceptionCheck(environment)) {
+        (*environment)->ExceptionClear(environment);
+        LOGE("HOLO_QUALIFICATION status=NOT_RUN reason=intent-read");
+        requested = false;
+    }
+    if (key != NULL) (*environment)->DeleteLocalRef(environment, key);
+    if (intent_class != NULL) (*environment)->DeleteLocalRef(environment, intent_class);
+    if (intent != NULL) (*environment)->DeleteLocalRef(environment, intent);
+    if (activity_class != NULL) (*environment)->DeleteLocalRef(environment, activity_class);
+    if (attached) (*vm)->DetachCurrentThread(vm);
+    return requested;
+}
+
+/* The conservative bounds include every antialiased ring/X sample, including
+ * strokes whose center is outside the viewport. Bounds affect presentation
+ * only: all world-space factors stay in the reduced mathematical divisor. */
+static void draw_marker_region(struct engine *engine, const float position[2]) {
+    double radius = 0.42 * (double)(engine->width < engine->height ? engine->width : engine->height) * engine->zoom;
+    double center_x = 0.5 * engine->width + radius * position[0];
+    double center_y = 0.5 * engine->height + radius * position[1];
+    if (!isfinite(center_x) || !isfinite(center_y) ||
+        center_x + 12.0 <= 0.0 || center_y + 12.0 <= 0.0 ||
+        center_x - 12.0 >= engine->width || center_y - 12.0 >= engine->height) return;
+    int left = (int)fmax(0.0, floor(center_x - 12.0));
+    int bottom = (int)fmax(0.0, floor(center_y - 12.0));
+    int right = (int)fmin((double)engine->width, ceil(center_x + 12.0));
+    int top = (int)fmin((double)engine->height, ceil(center_y + 12.0));
+    glScissor(left, bottom, right - left, top - bottom);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+/* Replaying the same complete compositing function in each bounded region
+ * preserves exact zero -> pole -> remote -> controls order, even at overlaps.
+ * No framebuffer blending or separately authored marker shader is involved. */
+static void draw_checked_scene(struct engine *engine, bool localized) {
+    glDisable(GL_SCISSOR_TEST);
+    glUniform1i(engine->numeric_output_location, localized ? 4 : 0);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (!localized) return;
+    glUniform1i(engine->numeric_output_location, 0);
+    glEnable(GL_SCISSOR_TEST);
+    for (int index = 0; index < engine->zero_count; ++index)
+        draw_marker_region(engine, engine->zero_positions[index]);
+    for (int index = 0; index < engine->pole_count; ++index)
+        draw_marker_region(engine, engine->pole_positions[index]);
+    for (int index = 0; index < HOLOMORPHIC_REMOTE_POLE_COUNT; ++index)
+        draw_marker_region(engine, engine->remote_pole_positions[index]);
+    double side = (double)(engine->width < engine->height ? engine->width : engine->height);
+    double control_radius = fmin(38.0, fmax(26.0, 0.048 * side));
+    int control_width = (int)fmin((double)engine->width, ceil(4.0 * control_radius + 32.0));
+    int control_height = (int)fmin((double)engine->height, ceil(2.0 * control_radius + 18.0));
+    glScissor(0, 0, control_width, control_height);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDisable(GL_SCISSOR_TEST);
+}
+
+#include "holo_overlay_qualification.h"
+
 static void draw_frame(struct engine *engine) {
     if (
         engine->display == EGL_NO_DISPLAY || engine->program == 0 ||
@@ -435,6 +983,38 @@ static void draw_frame(struct engine *engine) {
         return;
     }
 
+    if (!engine->numeric_probe_attempted) {
+        engine->numeric_probe_attempted = true;
+        if (engine->qualification_requested) {
+            run_numeric_probes(engine);
+            if (HOLOMORPHIC_REQUIRE_GENERATED_SHADER) qualify_overlay_pixels(engine);
+        } else {
+            LOGI("HOLO_QUALIFICATION status=NOT_RUN reason=interactive-launch explicit_intent=holo_qualification");
+        }
+    }
+
+    bool capturing_performance = holo_frame_samples_collecting(&engine->performance_samples);
+    if (capturing_performance && engine->performance_samples.count == 0) {
+        struct holomorphic_walk_cpu_performance startup_worker_window;
+        holomorphic_walk_take_cpu_performance(&startup_worker_window);
+    }
+    double preparation_start = monotonic_seconds();
+    struct holomorphic_divisor divisor;
+    for (int index = 0; index < HOLOMORPHIC_REMOTE_POLE_COUNT; ++index) {
+        if (!holomorphic_remote_pole(index, (double)engine->remote_pole_time,
+                engine->remote_pole_positions[index])) {
+            LOGE("holomorphic remote-pole geometry rejected: invalid input");
+            return;
+        }
+    }
+    if (!holomorphic_divisor_reduce_positions(
+            &divisor, engine->zero_count, engine->zero_positions,
+            engine->pole_count, engine->pole_positions,
+            HOLOMORPHIC_REMOTE_POLE_COUNT, engine->remote_pole_positions)) {
+        LOGE("holomorphic divisor reduction rejected: invalid input or capacity overflow");
+        return;
+    }
+    double upload_start = monotonic_seconds();
     glUseProgram(engine->program);
     glUniform2f(engine->resolution_location, (float)engine->width, (float)engine->height);
     glUniform1i(engine->zero_count_location, engine->zero_count);
@@ -450,14 +1030,29 @@ static void draw_frame(struct engine *engine) {
         HOLOMORPHIC_WALK_COEFFICIENT_COUNT,
         &engine->holomorphic_coefficients[0][0]
     );
-    glUniform1f(engine->remote_pole_time_location, engine->remote_pole_time);
+    if (HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
+        glUniform2fv(engine->remote_pole_positions_location,
+            HOLOMORPHIC_REMOTE_POLE_COUNT, &engine->remote_pole_positions[0][0]);
+        glUniform1i(engine->divisor_count_location, divisor.count);
+        glUniform3fv(engine->divisor_factors_location, divisor.count, &divisor.factors[0][0]);
+        glUniform1i(engine->numeric_output_location, 0);
+    } else {
+        glUniform1f(engine->remote_pole_time_location, engine->remote_pole_time);
+    }
     glUniform1f(engine->zoom_location, engine->zoom);
     glUniform1i(engine->placement_kind_location, (int)engine->placement_kind);
 
     glBindVertexArray(engine->vao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    double submission_start = monotonic_seconds();
+    if (!capturing_performance && engine->timing_window_start == 0.0) engine->timing_window_start = submission_start;
+    int gpu_query = capturing_performance ? -1 : holo_gpu_timer_begin(&engine->gpu_timer, engine->timing_frames);
+    if (HOLOMORPHIC_REQUIRE_GENERATED_SHADER) draw_checked_scene(engine, !engine->performance_reference_fullscreen);
+    else glDrawArrays(GL_TRIANGLES, 0, 3);
+    holo_gpu_timer_end(&engine->gpu_timer, gpu_query);
+    double submission_end = monotonic_seconds();
+    if (!capturing_performance) engine->timing_submission_cpu_ms += (submission_end - submission_start) * 1000.0;
 
-    if (!engine->logged_first_frame) {
+    if (!engine->logged_first_frame && engine->qualification_requested) {
         GLubyte center_pixel[4] = {0, 0, 0, 0};
         glReadPixels(
             engine->width ÷ 2, engine->height ÷ 2, 1, 1,
@@ -467,11 +1062,87 @@ static void draw_frame(struct engine *engine) {
             "holomorphic field first frame: center rgba=%u,%u,%u,%u",
             center_pixel[0], center_pixel[1], center_pixel[2], center_pixel[3]
         );
-        engine->logged_first_frame = true;
     }
 
-    if (!eglSwapBuffers(engine->display, engine->surface)) {
+    double presentation_start = monotonic_seconds();
+    bool presented = eglSwapBuffers(engine->display, engine->surface) == EGL_TRUE;
+    if (!presented) {
         LOGE("eglSwapBuffers failed: 0x%x", eglGetError());
+    }
+    double presentation_end = monotonic_seconds();
+    if (presented && !engine->logged_first_frame) {
+        LOGI("holomorphic field first frame: presented=1 readback=%s marker_regions=%s remote_factors=24",
+            engine->qualification_requested ? "qualification" : "disabled",
+            HOLOMORPHIC_REQUIRE_GENERATED_SHADER ?
+                (engine->performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized") : "legacy-reference");
+        engine->logged_first_frame = true;
+    }
+    struct holomorphic_walk_cpu_performance captured_worker_window = {0};
+    bool finishing_capture = capturing_performance &&
+        engine->performance_samples.count + 1u == HOLO_FRAME_SAMPLE_LIMIT;
+    if (finishing_capture) holomorphic_walk_take_cpu_performance(&captured_worker_window);
+    holo_frame_samples_record(&engine->performance_samples,
+        (upload_start - preparation_start) * 1000.0,
+        (submission_start - upload_start) * 1000.0,
+        (submission_end - submission_start) * 1000.0,
+        (presentation_end - presentation_start) * 1000.0,
+        presentation_end, presented);
+    if (finishing_capture) {
+        LOGI("HOLO_PERF_WORKER_CPU status=%s searches=%llu cpu_clock_samples=%llu invalid=%llu "
+             "total_thread_cpu_ms=%.9g raw_tsv=%s gpu_execution_ms=NOT_MEASURED_BY_WORKER_CLOCK",
+            captured_worker_window.measured > 0 && captured_worker_window.invalid == 0 ? "MEASURED" : "NOT_RUN",
+            (unsigned long long)captured_worker_window.searches,
+            (unsigned long long)captured_worker_window.measured,
+            (unsigned long long)captured_worker_window.invalid,
+            captured_worker_window.cpu_thread_ms, engine->performance_samples.output_path);
+    }
+    if (capturing_performance) {
+        engine->dirty = false;
+        return;
+    }
+    engine->timing_presentation_cpu_ms += (presentation_end - presentation_start) * 1000.0;
+    ++engine->timing_frames;
+    if (engine->timing_frames % 8u == 0u) holo_gpu_timer_poll(&engine->gpu_timer);
+    if (engine->timing_frames == 60) {
+        LOGI("HOLO_FRAME_TIMING frames=60 zero_count=%d pole_count=%d remote_count=24 reduced_factor_count=%d "
+             "draw_submission_cpu_wall_ms=%.9g egl_presentation_cpu_wall_ms=%.9g frame_interval_wall_ms=%.9g "
+             "gpu_execution_ms=SEE_HOLO_GPU_QUERY_WINDOW cpu_search_ms=SEE_HOLO_WORKER_CPU_WINDOW thermal=NOT_RUN",
+            engine->zero_count, engine->pole_count, divisor.count,
+            engine->timing_submission_cpu_ms ÷ 60.0,
+            engine->timing_presentation_cpu_ms ÷ 60.0,
+            (presentation_end - engine->timing_window_start) * 1000.0 ÷ 60.0);
+        struct holo_gpu_timer *timer = &engine->gpu_timer;
+        if (timer->enabled && timer->samples > 0) {
+            LOGI("HOLO_GPU_QUERY_WINDOW status=MEASURED frames=60 samples=%llu "
+                 "attempts=%llu busy=%llu rejected=%llu gpu_mean_ms=%.9g gpu_max_ms=%.9g",
+                 (unsigned long long)timer->samples, (unsigned long long)timer->attempts,
+                 (unsigned long long)timer->busy, (unsigned long long)timer->rejected,
+                 timer->total_ms / (double)timer->samples, timer->max_ms);
+        } else {
+            LOGI("HOLO_GPU_QUERY_WINDOW status=NOT_RUN frames=60 samples=%llu "
+                 "attempts=%llu busy=%llu rejected=%llu reason=%s",
+                 (unsigned long long)timer->samples, (unsigned long long)timer->attempts,
+                 (unsigned long long)timer->busy, (unsigned long long)timer->rejected,
+                 timer->enabled ? "not-ready" : timer->reason);
+        }
+        holo_gpu_timer_reset_window(timer);
+        struct holomorphic_walk_cpu_performance cpu;
+        holomorphic_walk_take_cpu_performance(&cpu);
+        if (cpu.measured > 0 && cpu.invalid == 0) {
+            LOGI("HOLO_WORKER_CPU_WINDOW status=MEASURED frames=60 searches=%llu "
+                 "cpu_clock_samples=%llu total_cpu_ms=%.9g mean_cpu_ms=%.9g",
+                 (unsigned long long)cpu.searches, (unsigned long long)cpu.measured,
+                 cpu.cpu_thread_ms, cpu.cpu_thread_ms ÷ (double)cpu.measured);
+        } else {
+            LOGI("HOLO_WORKER_CPU_WINDOW status=NOT_RUN frames=60 searches=%llu "
+                 "cpu_clock_samples=%llu invalid=%llu reason=thread-cpu-clock",
+                 (unsigned long long)cpu.searches, (unsigned long long)cpu.measured,
+                 (unsigned long long)cpu.invalid);
+        }
+        engine->timing_frames = 0;
+        engine->timing_submission_cpu_ms = 0.0;
+        engine->timing_presentation_cpu_ms = 0.0;
+        engine->timing_window_start = 0.0;
     }
     engine->dirty = false;
 }
@@ -624,6 +1295,7 @@ static void publish_deformation_snapshot(struct engine *engine, double now) {
 }
 
 static void log_holomorphic_state(struct engine *engine, double now, float score) {
+    if (holo_frame_samples_collecting(&engine->performance_samples)) return;
     if (now - engine->deformation_last_log < 2.0) {
         return;
     }
@@ -760,6 +1432,8 @@ static int32_t handle_input(struct android_app *app, AInputEvent *event) {
     if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION) {
         return 0;
     }
+    /* Only the explicitly selected frozen benchmark suppresses editing. */
+    if (engine->performance_frozen_pose) return 1;
 
     int32_t masked_action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
     size_t pointer_count = AMotionEvent_getPointerCount(event);
@@ -886,6 +1560,7 @@ static void handle_command(struct android_app *app, int32_t command) {
             }
             break;
         case APP_CMD_TERM_WINDOW:
+            engine->frame_ready = false;
             terminate_display(engine);
             break;
         case APP_CMD_WINDOW_RESIZED:
@@ -900,6 +1575,7 @@ static void handle_command(struct android_app *app, int32_t command) {
             break;
         case APP_CMD_LOST_FOCUS:
             engine->focused = false;
+            engine->frame_ready = false;
             break;
         default:
             break;
@@ -918,6 +1594,38 @@ void android_main(struct android_app *app) {
         .logged_first_frame = false
     };
     initialize_state(&engine);
+    engine.qualification_requested = launch_boolean_extra(&engine, "holo_qualification");
+    bool performance_requested = launch_boolean_extra(&engine, "holo_performance");
+    if (performance_requested && !HOLOMORPHIC_REQUIRE_GENERATED_SHADER) {
+        LOGE("HOLO_PERF_CAPTURE status=FAIL reason=checked-generated-program-required");
+    } else if (performance_requested && !engine.qualification_requested) {
+        if (!holo_frame_samples_begin(&engine.performance_samples, app->activity->internalDataPath)) {
+            LOGE("HOLO_PERF_CAPTURE status=FAIL reason=capture-allocation-or-path");
+        } else {
+            engine.performance_reference_fullscreen = launch_boolean_extra(&engine, "holo_reference_fullscreen");
+            engine.performance_frozen_pose = launch_boolean_extra(&engine, "holo_frozen_pose");
+            snprintf(engine.performance_samples.application_commit,
+                sizeof(engine.performance_samples.application_commit), "%s", HOLOMORPHIC_APPLICATION_COMMIT);
+            snprintf(engine.performance_samples.fragment_sha256,
+                sizeof(engine.performance_samples.fragment_sha256), "%s", HOLOMORPHIC_FRAGMENT_SHA256);
+            snprintf(engine.performance_samples.overlay_mode,
+                sizeof(engine.performance_samples.overlay_mode), "%s",
+                engine.performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized");
+            engine.performance_samples.frozen_pose = engine.performance_frozen_pose;
+            if (engine.performance_frozen_pose) {
+                engine.remote_pole_time = 0.375f;
+                engine.holomorphic_coefficients[0][0] = 0.03125f;
+                engine.holomorphic_coefficients[1][1] = -0.015625f;
+                engine.holomorphic_coefficients[4][0] = 0.000244140625f;
+            }
+            LOGI("HOLO_PERF_CAPTURE status=READY samples=1800 overlay_mode=%s frozen_pose=%d remote_count=24 "
+                 "gpu_timer=DISABLED_DURING_CAPTURE thermal=NOT_MEASURED raw_tsv=%s",
+                engine.performance_reference_fullscreen ? "fullscreen-diagnostic" : "localized",
+                engine.performance_frozen_pose, engine.performance_samples.output_path);
+        }
+    } else if (performance_requested) {
+        LOGE("HOLO_PERF_CAPTURE status=FAIL reason=qualification-and-performance-conflict");
+    }
 
     engine.deformation_workers_started = holomorphic_walk_start();
     if (engine.deformation_workers_started) {
@@ -935,29 +1643,90 @@ void android_main(struct android_app *app) {
     app->onAppCmd = handle_command;
     app->onInputEvent = handle_input;
 
+    engine.choreographer = AChoreographer_getInstance();
+    if (engine.choreographer == NULL) {
+        LOGE("HOLO_FRAME_PACING status=NOT_RUN reason=app-thread-choreographer-unavailable");
+        if (engine.deformation_workers_started) holomorphic_walk_stop();
+        holo_frame_samples_dispose(&engine.performance_samples);
+        ANativeActivity_finish(app->activity);
+        return;
+    }
+    LOGI("HOLO_FRAME_PACING status=READY mechanism=AChoreographer fixed_poll_delay_ms=0");
+
+    unsigned ready_event_drains = 0;
     while (true) {
         int events = 0;
         struct android_poll_source *source = NULL;
         bool can_animate = engine.display != EGL_NO_DISPLAY && engine.focused;
-        int timeout = can_animate ? 16 : (engine.dirty ? 0 : -1);
+        if (can_animate && !engine.frame_callback_pending && !engine.frame_ready) {
+            engine.frame_callback_pending = true;
+            AChoreographer_postFrameCallback(engine.choreographer,
+                display_frame_callback, &engine);
+        }
+        /* A ready display tick permits a bounded zero-time drain of queued
+         * input and lifecycle events. Otherwise the looper sleeps until an
+         * event or the one requested callback arrives, including unfocused. */
+        int timeout = can_animate && engine.frame_ready ? 0 : -1;
+        double wait_start = monotonic_seconds();
         int ident = ALooper_pollOnce(timeout, NULL, &events, (void **)&source);
+        double wait_wall_ms = (monotonic_seconds() - wait_start) * 1000.0;
+        if (can_animate) {
+            ++engine.pacing_wait_samples;
+            engine.pacing_wait_wall_ms += wait_wall_ms;
+            if (wait_wall_ms > engine.pacing_wait_max_wall_ms) {
+                engine.pacing_wait_max_wall_ms = wait_wall_ms;
+            }
+        }
 
         if (ident >= 0 && source != NULL) {
             source->process(app, source);
         }
-        if (app->destroyRequested != 0) {
+        if (app->destroyRequested != 0 || ident == ALOOPER_POLL_ERROR) {
+            if (ident == ALOOPER_POLL_ERROR) {
+                LOGE("HOLO_FRAME_PACING status=FAIL reason=looper-poll-error");
+                ANativeActivity_finish(app->activity);
+            }
             if (engine.deformation_workers_started) {
                 holomorphic_walk_stop();
                 engine.deformation_workers_started = false;
             }
             terminate_display(&engine);
+            holo_frame_samples_dispose(&engine.performance_samples);
             return;
         }
-        if (engine.display != EGL_NO_DISPLAY && engine.focused) {
-            advance_holomorphic_function(&engine);
+        if (engine.display == EGL_NO_DISPLAY || !engine.focused) {
+            engine.frame_ready = false;
+            ready_event_drains = 0;
+            continue;
         }
+        if (!engine.frame_ready) continue;
+        /* A continuous event stream must not starve an already-ready frame.
+         * Further input remains queued and is handled before the next tick. */
+        if (ident != ALOOPER_POLL_TIMEOUT && ++ready_event_drains < 8u) continue;
+
+        ready_event_drains = 0;
+        engine.frame_ready = false;
+        if (engine.performance_frozen_pose) engine.dirty = true;
+        else advance_holomorphic_function(&engine);
         if (engine.dirty) {
             draw_frame(&engine);
+        }
+        ++engine.pacing_ticks;
+        if (engine.pacing_ticks == 60) {
+            if (!holo_frame_samples_collecting(&engine.performance_samples))
+            LOGI("HOLO_FRAME_PACING status=MEASURED mechanism=AChoreographer ticks=60 "
+                 "callbacks=%llu poll_calls=%llu poll_wait_wall_mean_ms=%.9g "
+                 "poll_wait_wall_max_ms=%.9g gpu_execution_ms=NOT_MEASURED_BY_POLL",
+                (unsigned long long)engine.pacing_callbacks,
+                (unsigned long long)engine.pacing_wait_samples,
+                engine.pacing_wait_samples == 0 ? 0.0 :
+                    engine.pacing_wait_wall_ms ÷ (double)engine.pacing_wait_samples,
+                engine.pacing_wait_max_wall_ms);
+            engine.pacing_callbacks = 0;
+            engine.pacing_ticks = 0;
+            engine.pacing_wait_samples = 0;
+            engine.pacing_wait_wall_ms = 0.0;
+            engine.pacing_wait_max_wall_ms = 0.0;
         }
     }
 }

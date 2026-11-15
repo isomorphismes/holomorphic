@@ -1,8 +1,20 @@
 # ICK source production
 
 Owned Android C and the existing worker regression use the division glyph directly.
-The compiler is ICK c61e448251744a2f40ad743ebef1a027bdcd2f9d, with the Android
-source boundary pinned to ai-ci 903b2cb27ea572c9c6cb2ffa9f39e0fbf06ec9f8.
+Android C uses ICK fbe86e23d55cfec2000c08e61deea2a407fd7175, with the
+Android source boundary pinned to ai-ci 66eba2c0e02276386ed9d736614348fd3416d48a.
+The independent host worker and binding checks retain ICK
+c61e448251744a2f40ad743ebef1a027bdcd2f9d through their separately pinned native
+provider; the Android compiler update does not relabel those host receipts.
+
+The Android producer fixes `gcc_cv_as_base64=no` at compiler configuration,
+because GNU as accepts a directive that NDK r29's actual assembler rejects.
+The declared GCC source has no `-fno-asm-base64` option. Its string emission is
+controlled by the configure-time `HAVE_GAS_BASE64` capability, so the shared
+producer disables that capability globally before qualification. Literal UTF-8
+glyph tests remain unchanged. The old ARM64 failure is retained in
+`_/ci/android-base64-failure-2026-10-19.tsv`; the new compiler, APK and device
+boundaries require fresh evidence.
 
 All maintained APK, unsigned-release and Play producers qualify the same three
 ABI stages and restore them under `_/build/ick/<abi>`. They check out the shared

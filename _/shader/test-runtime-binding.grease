@@ -1,0 +1,12 @@
+#!/usr/bin/env grease
+# Kitchen supplies the exact qualified ICK host compiler. No cc/clang fallback.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 2
+var root = ARGV[0]
+var compiler = ARGV[1]
+test -x "$compiler"
+var output = "$root/_/build/source-binding-contract/test-runtime-source-binding"
+mkdir -p "$(dirname "$output")"
+"$compiler" -fno-link-libatomic -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic \
+  -I "$root/_/shader" "$root/_/shader/test_runtime_source_binding.c" -o "$output"
+"$output"

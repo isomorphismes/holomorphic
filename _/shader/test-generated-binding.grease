@@ -1,0 +1,35 @@
+#!/usr/bin/env grease
+# Contract fixtures only. These bytes are never compiler or GPU evidence.
+set -o errexit -o nounset -o pipefail
+test "$#" -eq 2
+var root = ARGV[0]
+var grease = ARGV[1]
+var output = "$root/_/build/source-binding-contract"
+mkdir -p "$output"
+printf 'abc' > "$output/fixture.frag"
+printf 'compiler=idris2-glsles\nbackend_repo=fuego-ironworks/idris-shader-backend\nbackend_commit=f32f27a37a176a7b2c580aa703c5d33df9511728\napplication_repo=isomorphismes/holomorphic\napplication_commit=3cfcf71a2949e453c679a99b2cc165e7dfbf425f\nfragment_sha256=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n' > "$output/fixture.provenance"
+"$grease" "$root/_/shader/bind-generated-fragment.grease" "$output/fixture.frag" "$output/fixture.provenance" "$output/binding.h" > "$output/positive.log"
+grep -Fxq '#define HOLOMORPHIC_REQUIRE_GENERATED_SHADER 1' "$output/binding.h"
+grep -Fxq '#define HOLOMORPHIC_FRAGMENT_LENGTH 3u' "$output/binding.h"
+printf 'abd' > "$output/swapped.frag"
+if "$grease" "$root/_/shader/bind-generated-fragment.grease" "$output/swapped.frag" "$output/fixture.provenance" "$output/rejected-binding.h" > "$output/swapped.log" 2>&1 {
+  printf '\033[31mFAIL\033[0m changed bytes with unchanged receipt accepted\n'
+  exit 1
+}
+if "$grease" "$root/_/shader/bind-generated-fragment.grease" "$output/fixture.frag" "$output/missing.provenance" "$output/rejected-binding.h" > "$output/missing.log" 2>&1 {
+  printf '\033[31mFAIL\033[0m missing provenance accepted\n'
+  exit 1
+}
+sed 's/compiler=idris2-glsles/compiler=handwritten/' "$output/fixture.provenance" > "$output/handwritten.provenance"
+if "$grease" "$root/_/shader/bind-generated-fragment.grease" "$output/fixture.frag" "$output/handwritten.provenance" "$output/rejected-binding.h" > "$output/handwritten.log" 2>&1 {
+  printf '\033[31mFAIL\033[0m handwritten identity accepted\n'
+  exit 1
+}
+cat "$output/fixture.provenance" > "$output/duplicate.provenance"
+printf 'compiler=idris2-glsles\n' >> "$output/duplicate.provenance"
+if "$grease" "$root/_/shader/bind-generated-fragment.grease" "$output/fixture.frag" "$output/duplicate.provenance" "$output/rejected-binding.h" > "$output/duplicate.log" 2>&1 {
+  printf '\033[31mFAIL\033[0m duplicate receipt field accepted\n'
+  exit 1
+}
+test ! -e "$output/rejected-binding.h"
+printf '\033[32mPASS\033[0m source-binding generator accepts exact fixture and rejects four semantic mutations\n'

@@ -1,0 +1,120 @@
+# Synthetic offline transport for the publication control-flow test only.
+# Never contacts GitHub, downloads an APK, or supplies GPU evidence.
+set -o errexit -o nounset -o pipefail
+var state = ENV.HOLO_TEST_STATE
+var tag = ENV.HOLO_TEST_TAG
+var source = ENV.HOLO_TEST_SOURCE
+var tool = $(basename "$0")
+var repo = 'isomorphismes/holomorphic'
+var tab = $(printf '\t')
+var url = "https://github.com/$repo/releases/tag/$tag"
+printf '%s' "$tool" >> "$state/calls.tsv"
+for arg in "$@" { printf '\t%s' "$arg" >> "$state/calls.tsv" }
+printf '\n' >> "$state/calls.tsv"
+if (tool === 'curl') {
+  var name = $(basename "$[ARGV[len(ARGV) - 1]]")
+  test -f "$state/assets/$name"
+  test "$(cat "$state/draft")" = false
+  cat "$state/assets/$name"
+  exit 0
+}
+test "$tool" = gh
+case "$1" in
+  --version) echo 'synthetic gh transport fixture; not real GitHub execution'; exit 0 ;;
+  auth) exit 0 ;;
+  repo) echo "$repo"; exit 0 ;;
+  release)
+    test "$2" = upload
+    test "$3" = "$tag"
+    var name = $(basename "$4")
+    test ! -e "$state/assets/$name"
+    cp "$4" "$state/assets/$name"
+    var id = '5002'
+    case "$name" in *.apk) setvar id = '5001'
+      ;; esac
+    printf '%s\t%s\n' "$id" "$name" >> "$state/assets.tsv"
+    exit 0
+    ;;
+  api) ;;
+  *) exit 90 ;;
+esac
+var endpoint = ''
+var method = 'GET'
+var query = ARGV[len(ARGV) - 1]
+var index = 0
+while (index < len(ARGV)) {
+  var arg = ARGV[index]
+  if (arg === '--method') { setvar method = ARGV[index + 1] }
+  case "$arg" in repos/*) setvar endpoint = arg
+    ;; esac
+  setvar index += 1
+}
+if (endpoint === "repos/$repo/releases" and method === 'POST') {
+  test "$query" = .id
+  for required in "tag_name=$tag" "target_commitish=$source" draft=true prerelease=true {
+    var matches = 0
+    for arg in "$@" { if (arg === required) { setvar matches += 1 } }
+    test "$matches" -eq 1
+  }
+  test ! -e "$state/exists"
+  touch "$state/exists"
+  printf 'true\n' > "$state/draft"
+  printf '417754546\n'
+  exit 0
+}
+if (endpoint === "repos/$repo/releases?per_page=100") {
+  # Created mode intentionally keeps the list stale forever. Only the numeric
+  # ID returned by POST can discover that object's metadata in this fixture.
+  var scenario = $(cat "$state/scenario")
+  if (scenario !== 'created') { printf '417754546\t%s\n' "$tag" }
+  exit 0
+}
+if (endpoint === "repos/$repo/git/matching-refs/tags/$tag") { exit 0 }
+if (endpoint === "repos/$repo/releases/417754546") {
+  test -e "$state/exists"
+  if (method === 'PATCH') {
+    test "$(wc -l < "$state/assets.tsv" | tr -d '[:space:]')" -eq 2
+    printf 'false\n' > "$state/draft"
+    printf '%s\n' "$url"
+    exit 0
+  }
+  if test -e "$state/fail-first-metadata" {
+    rm "$state/fail-first-metadata"
+    echo 'synthetic transient metadata 404' >&2
+    exit 22
+  }
+  var draft = $(cat "$state/draft")
+  case "$query" in
+    *html_url*) printf '%s\t%s\ttrue\t%s\t%s\n' "$tag" "$source" "$draft" "$url" ;;
+    *) printf '%s\t%s\ttrue\t%s\n' "$tag" "$source" "$draft" ;;
+  esac
+  exit 0
+}
+if (endpoint === "repos/$repo/releases/417754546/assets?per_page=100") {
+  while IFS="$tab" read -r id name {
+    case "$query" in
+      *browser_download_url*)
+        var bytes = $(wc -c < "$state/assets/$name" | tr -d '[:space:]')
+        printf '%s\t%s\thttps://github.com/%s/releases/download/%s/%s\n' "$name" "$bytes" "$repo" "$tag" "$name"
+        ;;
+      *) printf '%s\t%s\n' "$id" "$name" ;;
+    esac
+  } < "$state/assets.tsv"
+  exit 0
+}
+case "$endpoint" in
+  repos/isomorphismes/holomorphic/releases/assets/*)
+    var id = $(basename "$endpoint")
+    var name = $(awk -F '\t' -v id="$id" '$1 == id {print $2}' "$state/assets.tsv")
+    test -n "$name"
+    cat "$state/assets/$name"
+    exit 0
+    ;;
+esac
+if (endpoint === "repos/$repo/git/ref/tags/$tag") {
+  test "$(cat "$state/draft")" = false
+  printf 'commit\t%s\n' "$source"
+  exit 0
+}
+printf 'unexpected synthetic endpoint: %s %s\n' "$method" "$endpoint" >&2
+exit 91
